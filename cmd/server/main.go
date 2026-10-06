@@ -19,6 +19,14 @@ import (
 
 func main() {
 
+	if len(os.Args) > 1 && os.Args[1] == "--reset-admin" {
+		if err := resetAdminCredentials(); err != nil {
+			log.Fatal(err)
+		}
+		log.Println("admin credentials reset successfully")
+		return
+	}
+
 	addr := getenv("LOCALLINK_ADDR", ":8080")
 	dbPath := getenv("LOCALLINK_DB", "data/locallink.db")
 
@@ -52,6 +60,8 @@ func main() {
 	mux.HandleFunc("GET /api/v1/auth/me", api.AuthMe)
 	mux.HandleFunc("POST /api/v1/auth/logout", api.LogoutAccount)
 	mux.HandleFunc("POST /api/v1/admin/login", api.AdminLogin)
+	mux.HandleFunc("GET /admin", api.AdminWeb)
+	mux.HandleFunc("GET /admin/", api.AdminWeb)
 	mux.Handle("POST /api/v1/account/transfer/start", api.WithIdempotency("account-transfer-start", http.HandlerFunc(api.StartAccountTransfer)))
 	mux.Handle("POST /api/v1/account/transfer/cancel", api.WithIdempotency("account-transfer-cancel", http.HandlerFunc(api.CancelAccountTransfer)))
 	mux.Handle("POST /api/v1/account/transfer/complete", api.WithIdempotency("account-transfer-complete", http.HandlerFunc(api.CompleteAccountTransfer)))
@@ -121,8 +131,6 @@ func main() {
 	mux.Handle("POST /api/v1/groups", api.WithIdempotency("group-create", http.HandlerFunc(api.CreateGroup)))
 	mux.HandleFunc("GET /api/v1/groups/members", api.GroupMembers)
 	mux.HandleFunc("POST /api/v1/groups/members", api.AddGroupMember)
-	mux.HandleFunc("GET /api/v1/groups/keys", api.ListGroupKeyEnvelopes)
-	mux.Handle("POST /api/v1/groups/keys", api.WithIdempotency("group-key-distribute", http.HandlerFunc(api.DistributeGroupKeyEnvelopes)))
 	mux.HandleFunc("DELETE /api/v1/groups/members", api.RemoveGroupMember)
 	mux.HandleFunc("GET /api/v1/group-messages", api.ListGroupMessages)
 	mux.HandleFunc("POST /api/v1/group-messages", api.CreateGroupMessage)
@@ -259,6 +267,28 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)
+}
+
+func resetAdminCredentials() error {
+	envName := strings.ToLower(strings.TrimSpace(getenv("LOCALLINK_ENV", "production")))
+	if envName != "development" && envName != "test" {
+		return fmt.Errorf("--reset-admin is allowed only in development/test")
+	}
+
+	dbPath := getenv("LOCALLINK_DB", "data/locallink.db")
+
+	st, err := store.Open(dbPath)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	api, err := httpapi.NewWithError(st)
+	if err != nil {
+		return err
+	}
+
+	return api.ResetAdminCredentials()
 }
 
 func validateProductionSecrets() error {

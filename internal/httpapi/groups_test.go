@@ -36,7 +36,7 @@ func TestGroupSchemaAndHelpers(t *testing.T) {
 	_ = req
 	if !api.isGroupMember("missing", "a") { /* expected false */
 	}
-	if _, err := st.DB().Exec(`INSERT INTO groups(id,name,owner_id,created_at,key_version,rekey_required) VALUES('g','Test','a',?,?,?)`, now, 1, 0); err != nil {
+	if _, err := st.DB().Exec(`INSERT INTO groups(id,name,owner_id,created_at) VALUES('g','Test','a',?)`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.DB().Exec(`INSERT INTO group_members(group_id,device_id,role,joined_at) VALUES('g','a','owner',?)`, now); err != nil {
@@ -45,11 +45,11 @@ func TestGroupSchemaAndHelpers(t *testing.T) {
 	if !api.isGroupOwner("g", "a") || !api.isGroupMember("g", "a") {
 		t.Fatal("group owner/member helper failed")
 	}
-	m, existing, err := api.insertGroupMessage("a", "g", `gme:v1:{"version":1,"type":"group_message","key_version":1}`, "2026-01-01T00:00:00Z", "m1", nil)
+	m, existing, err := api.insertGroupMessage("a", "g", `hello group`, "2026-01-01T00:00:00Z", "m1", nil)
 	if err != nil || existing || m.ID != "m1" {
 		t.Fatalf("insert failed: %+v existing=%v err=%v", m, existing, err)
 	}
-	m2, existing, err := api.insertGroupMessage("a", "g", `gme:v1:{"version":1,"type":"group_message","key_version":1}`, "2026-01-01T00:00:00Z", "m1", nil)
+	m2, existing, err := api.insertGroupMessage("a", "g", `hello group`, "2026-01-01T00:00:00Z", "m1", nil)
 	if err != nil || !existing || m2.ID != "m1" {
 		t.Fatalf("idempotency failed: %+v existing=%v err=%v", m2, existing, err)
 	}

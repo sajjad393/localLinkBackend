@@ -70,7 +70,7 @@ func TestUploadDownloadAndAttachmentAuthorization(t *testing.T) {
 	if payload.File.ID == "" || payload.File.Size != int64(len("hello-local-link")) {
 		t.Fatalf("bad metadata: %+v", payload.File)
 	}
-	msgRes := doJSON(t, api.CreateMessage, http.MethodPost, "/api/v1/messages", map[string]any{"id": "file-msg", "recipient_id": "b", "body": testDirectE2EEnvelope("file-msg", "a", "b"), "attachment_ids": []string{payload.File.ID}}, headersA)
+	msgRes := doJSON(t, api.CreateMessage, http.MethodPost, "/api/v1/messages", map[string]any{"id": "file-msg", "recipient_id": "b", "body": "file attachment message", "attachment_ids": []string{payload.File.ID}}, headersA)
 	if msgRes.Code != http.StatusCreated {
 		t.Fatalf("message attach: %d %s", msgRes.Code, msgRes.Body.String())
 	}

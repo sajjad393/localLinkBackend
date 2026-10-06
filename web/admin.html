@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LocalLink Admin</title>
+    <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #141c2d;
+        --panel-soft: #1b2942;
+        --primary: #7dd3fc;
+        --text: #e5eefb;
+        --muted: #9fb3c8;
+        --danger: #f87171;
+        --success: #34d399;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Arial, Helvetica, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 48px auto;
+        padding: 24px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid rgba(125, 211, 252, 0.18);
+        border-radius: 12px;
+        padding: 24px;
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.2);
+      }
+      h1 {
+        margin-top: 0;
+        margin-bottom: 10px;
+      }
+      .muted { color: var(--muted); }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 18px;
+        margin-top: 24px;
+      }
+      .stat {
+        background: var(--panel-soft);
+        padding: 18px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.05);
+      }
+      .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+      .value { font-size: 2rem; font-weight: bold; margin-top: 8px; }
+      .row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 20px;
+      }
+      button, input {
+        border-radius: 8px;
+        border: 1px solid rgba(255,255,255,0.1);
+        padding: 10px 14px;
+        font-size: 14px;
+      }
+      input {
+        background: #0d1527;
+        color: var(--text);
+        min-width: 220px;
+      }
+      button {
+        cursor: pointer;
+        background: var(--primary);
+        color: #04121f;
+        font-weight: 700;
+      }
+      .status {
+        margin-top: 16px;
+        padding: 12px 14px;
+        border-radius: 8px;
+        background: rgba(52, 211, 153, 0.1);
+        color: var(--success);
+        display: none;
+      }
+      .status.error {
+        background: rgba(248, 113, 113, 0.12);
+        color: var(--danger);
+      }
+      .status.visible { display: block; }
+      .small {
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 18px;
+      }
+      .endpoint-list {
+        margin-top: 26px;
+      }
+      .endpoint-list ul {
+        margin: 10px 0 0 18px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>LocalLink Admin</h1>
+        <div class="muted">Backend dashboard for local network administration</div>
+
+        <div class="row">
+          <input id="username" type="text" placeholder="Admin username" value="admin" />
+          <input id="password" type="password" placeholder="Password" />
+          <button id="loginBtn">Login</button>
+        </div>
+
+        <div id="status" class="status"></div>
+
+        <div class="grid">
+          <div class="stat">
+            <div class="label">System</div>
+            <div class="value" id="systemStatus">Ready</div>
+          </div>
+          <div class="stat">
+            <div class="label">Health</div>
+            <div class="value" id="healthStatus">-</div>
+          </div>
+          <div class="stat">
+            <div class="label">API</div>
+            <div class="value" id="apiStatus">-</div>
+          </div>
+        </div>
+
+        <div class="endpoint-list">
+          <h3>Available admin API endpoints</h3>
+          <ul>
+            <li>POST /api/v1/admin/login</li>
+            <li>GET /api/v1/admin/summary</li>
+            <li>GET /api/v1/admin/users</li>
+            <li>GET /api/v1/admin/settings</li>
+            <li>GET /api/v1/admin/runtime-diagnostics</li>
+          </ul>
+        </div>
+
+        <div class="small">
+          This page is a lightweight dashboard wrapper for the LocalLink backend API. It is intended for local/admin testing and is not a standalone frontend product.
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const statusEl = document.getElementById('status');
+      const healthStatusEl = document.getElementById('healthStatus');
+      const apiStatusEl = document.getElementById('apiStatus');
+      const systemStatusEl = document.getElementById('systemStatus');
+
+      function showStatus(message, isError = false) {
+        statusEl.textContent = message;
+        statusEl.classList.toggle('error', isError);
+        statusEl.classList.add('visible');
+      }
+
+      async function checkHealth() {
+        try {
+          const response = await fetch('/health');
+          const json = await response.json();
+          healthStatusEl.textContent = response.ok ? 'Live' : 'Error';
+          apiStatusEl.textContent = response.ok ? 'OK' : 'Fail';
+          systemStatusEl.textContent = response.ok ? 'Online' : 'Offline';
+          if (!response.ok) {
+            showStatus('Health endpoint returned an error.', true);
+          }
+          return json;
+        } catch (err) {
+          healthStatusEl.textContent = 'Down';
+          apiStatusEl.textContent = 'Fail';
+          systemStatusEl.textContent = 'Offline';
+          showStatus('Unable to reach backend health endpoint.', true);
+          return null;
+        }
+      }
+
+      document.getElementById('loginBtn').addEventListener('click', async () => {
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value;
+
+        if (!username || !password) {
+          showStatus('Please enter both username and password.', true);
+          return;
+        }
+
+        try {
+          const response = await fetch('/api/v1/admin/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password })
+          });
+          const data = await response.json();
+          if (!response.ok) {
+            showStatus(data?.error || 'Admin login failed.', true);
+            return;
+          }
+          showStatus('Admin login request sent successfully.');
+          systemStatusEl.textContent = 'Authenticated';
+        } catch (err) {
+          showStatus('Login request failed. Check backend status.', true);
+        }
+      });
+
+      checkHealth();
+    </script>
+  </body>
+</html>

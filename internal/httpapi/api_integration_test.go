@@ -35,7 +35,7 @@ func TestDeviceAuthAndConversationAuthorization(t *testing.T) {
 
 	headersA := map[string]string{"Authorization": "Bearer " + tokenA, "X-Device-ID": "a", "Content-Type": "application/json"}
 	msgRes := doJSON(t, a.CreateMessage, http.MethodPost, "/api/v1/messages", map[string]any{
-		"id": "message-1", "sender_id": "a", "recipient_id": "b", "body": testDirectE2EEnvelope("message-1", "a", "b"),
+		"id": "message-1", "sender_id": "a", "recipient_id": "b", "body": "hello-local-link",
 	}, headersA)
 	if msgRes.Code != http.StatusCreated {
 		t.Fatalf("create message: got %d: %s", msgRes.Code, msgRes.Body.String())
@@ -80,8 +80,8 @@ func TestDeviceAuthAndConversationAuthorization(t *testing.T) {
 	if !strings.Contains(ack.Body.String(), `"status":"delivered"`) {
 		t.Fatalf("ack response missing delivered status: %s", ack.Body.String())
 	}
-	if !strings.Contains(ack.Body.String(), `"body":"e2e:v2:`) {
-		t.Fatalf("ack response lost encrypted body: %s", ack.Body.String())
+	if !strings.Contains(ack.Body.String(), `"body":"hello`) {
+		t.Fatalf("ack response lost plaintext body: %s", ack.Body.String())
 	}
 	cursor := initialPayload.NextCursor
 	statusSync := doJSON(t, a.Sync, http.MethodGet, "/api/v1/sync?cursor="+cursor, nil, headersA)

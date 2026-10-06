@@ -3,8 +3,32 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
+
+func TestIdentityKeysIncludeCrossAccountPeers(t *testing.T) {
+	st, a := newTestAPI(t)
+	first := phase43RegisterAccount(t, a, "key-user-a", "key-device-a")
+	second := phase43RegisterAccount(t, a, "key-user-b", "key-device-b")
+
+	keyA := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	keyB := "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+	if res := doJSON(t, a.PutIdentityKey, http.MethodPut, "/api/v1/device-key", map[string]any{"public_key": keyA}, phase43Headers(first.Token, "key-device-a")); res.Code != http.StatusOK {
+		t.Fatalf("put key A failed: %d %s", res.Code, res.Body.String())
+	}
+	if res := doJSON(t, a.PutIdentityKey, http.MethodPut, "/api/v1/device-key", map[string]any{"public_key": keyB}, phase43Headers(second.Token, "key-device-b")); res.Code != http.StatusOK {
+		t.Fatalf("put key B failed: %d %s", res.Code, res.Body.String())
+	}
+
+	keys := doJSON(t, a.IdentityKeys, http.MethodGet, "/api/v1/device-keys", nil, phase43Headers(first.Token, "key-device-a"))
+	if keys.Code != http.StatusOK {
+		t.Fatalf("identity key list failed: %d %s", keys.Code, keys.Body.String())
+	}
+	if !strings.Contains(keys.Body.String(), `"peer_id":"key-device-b"`) {
+		t.Fatalf("cross-account peer key missing: %s", keys.Body.String())
+	}
+}
 
 func TestIdentityKeyRotationPreservesHistory(t *testing.T) {
 	st, a := newTestAPI(t)

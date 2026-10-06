@@ -5,36 +5,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"locallink/backend/internal/store"
 )
 
-func testDirectE2EEnvelope(id, sender, recipient string) string {
-	return directMessageEnvelope + `{"version":2,"type":"direct_message","sender_id":"` + sender + `","recipient_id":"` + recipient + `","message_id":"` + id + `","created_at":"2026-09-23T12:00:00Z","nonce":"AQEBAQEBAQEBAQEB","ciphertext":"Y2lwaGVydGV4dA","mac":"AQEBAQEBAQEBAQEBAQEBAQ"}`
-}
-
-func TestValidateDirectE2EEnvelopeRejectsPlaintextAndBindingMismatch(t *testing.T) {
-	id, sender, recipient := "m-1", "a", "b"
-	if err := validateDirectE2EEnvelope("hello", sender, recipient, id); err == nil {
-		t.Fatal("plaintext direct message must be rejected")
-	}
-	valid := testDirectE2EEnvelope(id, sender, recipient)
-	if err := validateDirectE2EEnvelope(valid, sender, recipient, id); err != nil {
-		t.Fatalf("valid envelope rejected: %v", err)
-	}
-	for _, mutated := range []string{
-		testDirectE2EEnvelope(id, "evil", recipient),
-		testDirectE2EEnvelope(id, sender, "evil"),
-		testDirectE2EEnvelope("other", sender, recipient),
-	} {
-		if err := validateDirectE2EEnvelope(mutated, sender, recipient, id); err == nil {
-			t.Fatal("mutated identity binding accepted")
-		}
-	}
-}
-
-func TestCreateMessageRequiresE2EV2(t *testing.T) {
+func TestCreateMessageAcceptsPlaintext(t *testing.T) {
 	st, err := store.Open(t.TempDir() + "/locallink.db")
 	if err != nil {
 		t.Fatal(err)
@@ -57,17 +32,14 @@ func TestCreateMessageRequiresE2EV2(t *testing.T) {
 	tokenA := register("a")
 	_ = register("b")
 	headers := map[string]string{"Authorization": "Bearer " + tokenA, "X-Device-ID": "a"}
-	bad := doJSON(t, a.CreateMessage, http.MethodPost, "/api/v1/messages", map[string]any{"id": "m-plain", "recipient_id": "b", "body": "hello"}, headers)
-	if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), "e2e:v2") {
-		t.Fatalf("plaintext was not rejected: %d %s", bad.Code, bad.Body.String())
+	plain := doJSON(t, a.CreateMessage, http.MethodPost, "/api/v1/messages", map[string]any{"id": "m-plain", "recipient_id": "b", "body": "hello", "created_at": "2026-09-23T12:00:00Z"}, headers)
+	if plain.Code != http.StatusCreated {
+		t.Fatalf("plaintext message rejected: %d %s", plain.Code, plain.Body.String())
 	}
-	good := doJSON(t, a.CreateMessage, http.MethodPost, "/api/v1/messages", map[string]any{"id": "m-good", "recipient_id": "b", "body": testDirectE2EEnvelope("m-good", "a", "b")}, headers)
-	if good.Code != http.StatusCreated {
-		t.Fatalf("valid encrypted message rejected: %d %s", good.Code, good.Body.String())
+	if !strings.Contains(plain.Body.String(), `"body":"hello"`) {
+		t.Fatalf("plaintext body missing: %s", plain.Body.String())
 	}
-	if strings.Contains(good.Body.String(), `"body":"hello"`) {
-		t.Fatal("plaintext body leaked into encrypted-message response")
-	}
+
 }
 
 func TestRateLimitScopesRejectExcessPresenceAndCallTraffic(t *testing.T) {

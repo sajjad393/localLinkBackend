@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -14,15 +13,13 @@ import (
 
 const maxGroupMembers = 100
 
-const maxEncryptedGroupMessageBody = 64 * 1024
+const maxGroupMessageBody = 16 * 1024
 
 type Group struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	OwnerID       string `json:"owner_id"`
-	CreatedAt     string `json:"created_at"`
-	KeyVersion    int    `json:"key_version"`
-	RekeyRequired bool   `json:"rekey_required"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	OwnerID   string `json:"owner_id"`
+	CreatedAt string `json:"created_at"`
 }
 
 type GroupMember struct {
@@ -61,7 +58,7 @@ func (a *API) ListGroups(w http.ResponseWriter, r *http.Request) {
 		args = append(args, params.Cursor.Key, params.Cursor.Key, params.Cursor.ID)
 	}
 	args = append(args, params.Limit+1)
-	rows, err := a.store.DB().Query(`SELECT g.id,g.name,g.owner_id,g.created_at,g.key_version,g.rekey_required FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE `+where+` ORDER BY g.name COLLATE NOCASE,g.id LIMIT ?`, args...)
+	rows, err := a.store.DB().Query(`SELECT g.id,g.name,g.owner_id,g.created_at FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE `+where+` ORDER BY g.name COLLATE NOCASE,g.id LIMIT ?`, args...)
 	if err != nil {
 		writeError(w, 500, "failed to list groups")
 		return
@@ -70,7 +67,7 @@ func (a *API) ListGroups(w http.ResponseWriter, r *http.Request) {
 	out := make([]Group, 0, params.Limit)
 	for rows.Next() {
 		var g Group
-		if err := rows.Scan(&g.ID, &g.Name, &g.OwnerID, &g.CreatedAt, &g.KeyVersion, &g.RekeyRequired); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.OwnerID, &g.CreatedAt); err != nil {
 			writeError(w, 500, "failed to read groups")
 			return
 		}
@@ -140,7 +137,7 @@ func (a *API) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`INSERT INTO groups(id,name,owner_id,created_at,key_version,rekey_required) VALUES(?,?,?,?,?,?)`, gid, in.Name, owner, now, 1, 1); err != nil {
+	if _, err = tx.Exec(`INSERT INTO groups(id,name,owner_id,created_at) VALUES(?,?,?,?)`, gid, in.Name, owner, now); err != nil {
 		writeError(w, 500, "failed to create group")
 		return
 	}
@@ -162,7 +159,7 @@ func (a *API) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "failed to commit group")
 		return
 	}
-	writeJSON(w, 201, Group{ID: gid, Name: in.Name, OwnerID: owner, CreatedAt: now, KeyVersion: 1, RekeyRequired: true})
+	writeJSON(w, 201, Group{ID: gid, Name: in.Name, OwnerID: owner, CreatedAt: now})
 }
 
 func (a *API) GroupMembers(w http.ResponseWriter, r *http.Request) {
@@ -251,12 +248,6 @@ func (a *API) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "failed to determine membership change")
 		return
 	}
-	if affected == 1 {
-		if _, err = tx.Exec(`UPDATE groups SET key_version=key_version+1,rekey_required=1 WHERE id=?`, gid); err != nil {
-			writeError(w, 500, "failed to advance group key epoch")
-			return
-		}
-	}
 	// Rebuild the latest membership event for every remaining member so their
 	// offline roster is updated too.
 	members, err := a.groupMemberIDsTx(tx, gid)
@@ -278,7 +269,7 @@ func (a *API) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 	if affected == 1 {
 		status = http.StatusCreated
 	}
-	writeJSON(w, status, map[string]any{"ok": true, "rekey_required": affected == 1})
+	writeJSON(w, status, map[string]any{"ok": true, "changed": affected == 1})
 }
 
 func (a *API) RemoveGroupMember(w http.ResponseWriter, r *http.Request) {
@@ -323,14 +314,6 @@ func (a *API) RemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 	}
 	if affected == 0 {
 		writeError(w, http.StatusNotFound, "device is not a group member")
-		return
-	}
-	if _, err = tx.Exec(`UPDATE groups SET key_version=key_version+1,rekey_required=1 WHERE id=?`, gid); err != nil {
-		writeError(w, 500, "failed to advance group key epoch")
-		return
-	}
-	if _, err = tx.Exec(`DELETE FROM group_key_envelopes WHERE group_id=? AND recipient_device_id=?`, gid, id); err != nil {
-		writeError(w, 500, "failed to revoke stored group-key envelopes")
 		return
 	}
 	// Remove stale membership/message events for this device and keep only the
@@ -449,7 +432,7 @@ func (a *API) CreateGroupMessage(w http.ResponseWriter, r *http.Request) {
 		CreatedAt     string   `json:"created_at"`
 		AttachmentIDs []string `json:"attachment_ids"`
 	}
-	if err := decodeJSON(r, &in, maxEncryptedGroupMessageBody+16<<10); err != nil {
+	if err := decodeJSON(r, &in, maxGroupMessageBody+16<<10); err != nil {
 		writeError(w, 400, "invalid request body")
 		return
 	}
@@ -457,8 +440,8 @@ func (a *API) CreateGroupMessage(w http.ResponseWriter, r *http.Request) {
 	in.GroupID = strings.TrimSpace(in.GroupID)
 	in.CreatedAt = strings.TrimSpace(in.CreatedAt)
 	createdAt, ok := normalizeGroupMessageCreatedAt(in.CreatedAt)
-	if in.GroupID == "" || !ok || !strings.HasPrefix(in.Body, "gme:v1:") || len(in.Body) > maxEncryptedGroupMessageBody || len(in.AttachmentIDs) > maxAttachmentsPerMessage {
-		writeError(w, 400, "encrypted group message, group_id and created_at are required; maximum encrypted body is 64KB")
+	if in.GroupID == "" || !ok || (strings.TrimSpace(in.Body) == "" && len(in.AttachmentIDs) == 0) || len(in.Body) > maxGroupMessageBody || len(in.AttachmentIDs) > maxAttachmentsPerMessage {
+		writeError(w, 400, "group_id, created_at and body or attachment are required; maximum body is 16KB")
 		return
 	}
 	if !a.isGroupMember(in.GroupID, sender) {
@@ -472,15 +455,11 @@ func (a *API) CreateGroupMessage(w http.ResponseWriter, r *http.Request) {
 	m, existing, err := a.insertGroupMessage(sender, in.GroupID, in.Body, createdAt, in.ID, in.AttachmentIDs)
 	if err != nil {
 		errorText := err.Error()
-		if strings.Contains(errorText, "invalid group message key version") {
-			writeError(w, http.StatusBadRequest, errorText)
-			return
-		}
 		if strings.Contains(errorText, "device is not a group member") {
 			writeError(w, http.StatusForbidden, errorText)
 			return
 		}
-		if strings.Contains(errorText, "different message") || strings.Contains(errorText, "attachment") || strings.Contains(errorText, "too many") || strings.Contains(errorText, "group key rotation") {
+		if strings.Contains(errorText, "different message") || strings.Contains(errorText, "attachment") || strings.Contains(errorText, "too many") {
 			writeError(w, http.StatusConflict, errorText)
 			return
 		}
@@ -497,25 +476,6 @@ func (a *API) CreateGroupMessage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, m)
 }
 
-func groupMessageKeyVersion(body string) (int, bool) {
-	const prefix = "gme:v1:"
-	if !strings.HasPrefix(body, prefix) {
-		return 0, false
-	}
-	var envelope struct {
-		Version    int    `json:"version"`
-		Type       string `json:"type"`
-		KeyVersion int    `json:"key_version"`
-	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(body[len(prefix):])), &envelope); err != nil {
-		return 0, false
-	}
-	if envelope.Version != 1 || envelope.Type != "group_message" || envelope.KeyVersion < 1 || envelope.KeyVersion > maxGroupKeyVersion {
-		return 0, false
-	}
-	return envelope.KeyVersion, true
-}
-
 func normalizeGroupMessageCreatedAt(value string) (string, bool) {
 	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
 	if err != nil {
@@ -525,8 +485,9 @@ func normalizeGroupMessageCreatedAt(value string) (string, bool) {
 }
 
 func (a *API) insertGroupMessage(sender, gid, body, createdAt, requested string, attachmentIDs []string) (GroupMessage, bool, error) {
-	if !strings.HasPrefix(body, "gme:v1:") || len(body) > maxEncryptedGroupMessageBody {
-		return GroupMessage{}, false, errors.New("group message body must be an encrypted gme:v1 envelope")
+	body = strings.TrimSpace(body)
+	if len(body) > maxGroupMessageBody || (body == "" && len(attachmentIDs) == 0) {
+		return GroupMessage{}, false, errors.New("group message body or attachment is required")
 	}
 	normalizedCreatedAt, ok := normalizeGroupMessageCreatedAt(createdAt)
 	if !ok {
@@ -570,19 +531,12 @@ func (a *API) insertGroupMessage(sender, gid, body, createdAt, requested string,
 	if !errors.Is(err, sql.ErrNoRows) {
 		return m, false, err
 	}
-	version, ok := groupMessageKeyVersion(body)
-	if !ok {
-		return m, false, errors.New("invalid group message key version")
-	}
-	var currentVersion, rekeyRequired int
-	if err = tx.QueryRow(`SELECT key_version,rekey_required FROM groups WHERE id=? AND EXISTS (SELECT 1 FROM group_members WHERE group_id=groups.id AND device_id=?)`, gid, sender).Scan(&currentVersion, &rekeyRequired); err != nil {
+	var memberExists int
+	if err = tx.QueryRow(`SELECT 1 FROM group_members WHERE group_id=? AND device_id=?`, gid, sender).Scan(&memberExists); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return m, false, errors.New("device is not a group member")
 		}
 		return m, false, err
-	}
-	if rekeyRequired != 0 || version != currentVersion {
-		return m, false, errors.New("group key rotation is required before sending")
 	}
 	if len(attachmentIDs) > maxAttachmentsPerMessage {
 		return m, false, errors.New("too many attachments")

@@ -3,7 +3,6 @@ package httpapi
 import (
 	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"image"
@@ -31,23 +30,16 @@ const (
 )
 
 type Attachment struct {
-	ID                   string `json:"id"`
-	OriginalName         string `json:"original_name"`
-	ContentType          string `json:"content_type"`
-	Size                 int64  `json:"size"`
-	SHA256               string `json:"sha256"`
-	Width                int    `json:"width,omitempty"`
-	Height               int    `json:"height,omitempty"`
-	IsImage              bool   `json:"is_image"`
-	DownloadURL          string `json:"download_url"`
-	ThumbnailURL         string `json:"thumbnail_url,omitempty"`
-	CryptoVersion        string `json:"crypto_version,omitempty"`
-	CryptoScope          string `json:"crypto_scope,omitempty"`
-	CryptoKeyVersion     int    `json:"crypto_key_version,omitempty"`
-	CryptoNonce          string `json:"crypto_nonce,omitempty"`
-	CryptoMac            string `json:"crypto_mac,omitempty"`
-	ThumbnailCryptoNonce string `json:"thumbnail_crypto_nonce,omitempty"`
-	ThumbnailCryptoMac   string `json:"thumbnail_crypto_mac,omitempty"`
+	ID           string `json:"id"`
+	OriginalName string `json:"original_name"`
+	ContentType  string `json:"content_type"`
+	Size         int64  `json:"size"`
+	SHA256       string `json:"sha256"`
+	Width        int    `json:"width,omitempty"`
+	Height       int    `json:"height,omitempty"`
+	IsImage      bool   `json:"is_image"`
+	DownloadURL  string `json:"download_url"`
+	ThumbnailURL string `json:"thumbnail_url,omitempty"`
 }
 
 type fileRecord struct {
@@ -101,10 +93,6 @@ func (a *API) UploadFile(w http.ResponseWriter, r *http.Request) {
 	owner, ok := a.authorizeDevice(r)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-File-Crypto-Version")), "e2e:v1") {
-		a.uploadE2EFile(w, r, owner)
 		return
 	}
 	quota := a.deviceStorageQuota()
@@ -445,16 +433,12 @@ func (a *API) DownloadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	if record.CryptoVersion != "" {
-		w.Header().Set("Content-Type", "application/octet-stream")
-	} else {
-		w.Header().Set("Content-Type", record.ContentType)
-	}
+	w.Header().Set("Content-Type", record.ContentType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Accept-Ranges", "bytes")
 	kind := "attachment"
-	if record.IsImage && record.CryptoVersion == "" {
+	if record.IsImage {
 		kind = "inline"
 	}
 	w.Header().Set("Content-Disposition", contentDisposition(kind, record.OriginalName))
@@ -491,13 +475,8 @@ func (a *API) DownloadThumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	if record.CryptoVersion != "" {
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Cache-Control", "no-store")
-	} else {
-		w.Header().Set("Content-Type", "image/png")
-		w.Header().Set("Cache-Control", "private, max-age=86400")
-	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Disposition", contentDisposition("inline", record.OriginalName+".png"))
 	http.ServeContent(w, r, filepath.Base(record.ThumbnailPath), fileModTime(record.ThumbnailPath), file)
@@ -532,10 +511,10 @@ func (a *API) fileByID(id string) (fileRecord, error) {
 	var imageFlag int
 	var width, height sql.NullInt64
 	err := a.store.DB().QueryRow(`
-SELECT id,owner_id,original_name,content_type,size,sha256,COALESCE(width,0),COALESCE(height,0),is_image,storage_path,COALESCE(thumbnail_path,''),created_at,status,COALESCE(crypto_version,''),COALESCE(crypto_scope,''),COALESCE(crypto_key_version,0),COALESCE(crypto_nonce,''),COALESCE(crypto_mac,''),COALESCE(thumbnail_crypto_nonce,''),COALESCE(thumbnail_crypto_mac,'')
+SELECT id,owner_id,original_name,content_type,size,sha256,COALESCE(width,0),COALESCE(height,0),is_image,storage_path,COALESCE(thumbnail_path,''),created_at,status
 FROM files WHERE id=?`, id).Scan(
 		&r.ID, &r.OwnerID, &r.OriginalName, &r.ContentType, &r.Size, &r.SHA256,
-		&width, &height, &imageFlag, &r.StoragePath, &r.ThumbnailPath, &r.CreatedAt, &r.Status, &r.CryptoVersion, &r.CryptoScope, &r.CryptoKeyVersion, &r.CryptoNonce, &r.CryptoMac, &r.ThumbnailCryptoNonce, &r.ThumbnailCryptoMac,
+		&width, &height, &imageFlag, &r.StoragePath, &r.ThumbnailPath, &r.CreatedAt, &r.Status,
 	)
 	if err != nil {
 		return r, err
@@ -555,12 +534,12 @@ FROM files WHERE id=?`, id).Scan(
 }
 
 func (a *API) attachmentsForMessage(messageID string) ([]Attachment, error) {
-	return a.attachmentsByQuery(`SELECT f.id,f.owner_id,f.original_name,f.content_type,f.size,f.sha256,COALESCE(f.width,0),COALESCE(f.height,0),f.is_image,f.storage_path,COALESCE(f.thumbnail_path,''),f.created_at,f.status,COALESCE(f.crypto_version,''),COALESCE(f.crypto_scope,''),COALESCE(f.crypto_key_version,0),COALESCE(f.crypto_nonce,''),COALESCE(f.crypto_mac,''),COALESCE(f.thumbnail_crypto_nonce,''),COALESCE(f.thumbnail_crypto_mac,'')
+	return a.attachmentsByQuery(`SELECT f.id,f.owner_id,f.original_name,f.content_type,f.size,f.sha256,COALESCE(f.width,0),COALESCE(f.height,0),f.is_image,f.storage_path,COALESCE(f.thumbnail_path,''),f.created_at,f.status
 FROM message_attachments ma JOIN files f ON f.id=ma.file_id WHERE ma.message_id=? ORDER BY ma.position`, messageID)
 }
 
 func (a *API) attachmentsForGroupMessage(messageID string) ([]Attachment, error) {
-	return a.attachmentsByQuery(`SELECT f.id,f.owner_id,f.original_name,f.content_type,f.size,f.sha256,COALESCE(f.width,0),COALESCE(f.height,0),f.is_image,f.storage_path,COALESCE(f.thumbnail_path,''),f.created_at,f.status,COALESCE(f.crypto_version,''),COALESCE(f.crypto_scope,''),COALESCE(f.crypto_key_version,0),COALESCE(f.crypto_nonce,''),COALESCE(f.crypto_mac,''),COALESCE(f.thumbnail_crypto_nonce,''),COALESCE(f.thumbnail_crypto_mac,'')
+	return a.attachmentsByQuery(`SELECT f.id,f.owner_id,f.original_name,f.content_type,f.size,f.sha256,COALESCE(f.width,0),COALESCE(f.height,0),f.is_image,f.storage_path,COALESCE(f.thumbnail_path,''),f.created_at,f.status
 FROM group_message_attachments ma JOIN files f ON f.id=ma.file_id WHERE ma.group_message_id=? ORDER BY ma.position`, messageID)
 }
 
@@ -575,7 +554,7 @@ func (a *API) attachmentsByQuery(query string, args ...any) ([]Attachment, error
 		var r fileRecord
 		var imageFlag int
 		var width, height sql.NullInt64
-		if err := rows.Scan(&r.ID, &r.OwnerID, &r.OriginalName, &r.ContentType, &r.Size, &r.SHA256, &width, &height, &imageFlag, &r.StoragePath, &r.ThumbnailPath, &r.CreatedAt, &r.Status, &r.CryptoVersion, &r.CryptoScope, &r.CryptoKeyVersion, &r.CryptoNonce, &r.CryptoMac, &r.ThumbnailCryptoNonce, &r.ThumbnailCryptoMac); err != nil {
+		if err := rows.Scan(&r.ID, &r.OwnerID, &r.OriginalName, &r.ContentType, &r.Size, &r.SHA256, &width, &height, &imageFlag, &r.StoragePath, &r.ThumbnailPath, &r.CreatedAt, &r.Status); err != nil {
 			return nil, err
 		}
 		if width.Valid {
@@ -787,285 +766,6 @@ func contentDisposition(kind, name string) string {
 	return kind + `; filename="` + strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(name, `"`, `'`), "\r", ""), "\n", "") + `"`
 }
 
-func decodeE2EHeader(value string, expectedLen int) ([]byte, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return nil, fmt.Errorf("missing cryptographic header")
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(value)
-	if err != nil || len(decoded) != expectedLen {
-		return nil, fmt.Errorf("invalid cryptographic header")
-	}
-	return decoded, nil
-}
-
-func validHexSHA256(value string) bool {
-	if len(value) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(value)
-	return err == nil
-}
-
-func (a *API) uploadE2EFile(w http.ResponseWriter, r *http.Request, owner string) {
-	const maxHeaderName = 255
-	if r.ContentLength > a.maxFileSize+2*1024*1024 {
-		writeError(w, http.StatusRequestEntityTooLarge, "file is too large")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, a.maxFileSize+2*1024*1024)
-	if err := r.ParseMultipartForm(1 << 20); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid encrypted multipart form")
-		return
-	}
-	if r.MultipartForm != nil {
-		defer r.MultipartForm.RemoveAll()
-	}
-	src, _, err := r.FormFile("file")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "encrypted file field is required")
-		return
-	}
-	defer src.Close()
-	clientID := strings.TrimSpace(r.Header.Get("X-Client-File-ID"))
-	if clientID == "" || !validClientFileID(clientID) {
-		writeError(w, http.StatusBadRequest, "valid client file id is required for E2E attachment")
-		return
-	}
-	originalName := filepath.Base(strings.TrimSpace(r.Header.Get("X-File-Original-Name")))
-	if originalName == "." || originalName == "" || strings.ContainsRune(originalName, '\x00') || len(originalName) > maxHeaderName {
-		writeError(w, http.StatusBadRequest, "invalid encrypted file name")
-		return
-	}
-	contentType := strings.TrimSpace(r.Header.Get("X-File-Content-Type"))
-	if contentType == "" || hasControlChars(contentType) {
-		writeError(w, http.StatusBadRequest, "invalid encrypted content type")
-		return
-	}
-	plainSize, err := strconv.ParseInt(strings.TrimSpace(r.Header.Get("X-File-Plaintext-Size")), 10, 64)
-	if err != nil || plainSize < 0 || plainSize > a.maxFileSize {
-		writeError(w, http.StatusBadRequest, "invalid plaintext size")
-		return
-	}
-	sha := strings.TrimSpace(r.Header.Get("X-File-Plaintext-SHA256"))
-	if !validHexSHA256(sha) {
-		writeError(w, http.StatusBadRequest, "invalid plaintext sha256")
-		return
-	}
-	scope := strings.TrimSpace(r.Header.Get("X-File-E2E-Scope"))
-	if scope != "direct" && scope != "group" {
-		writeError(w, http.StatusBadRequest, "invalid E2E scope")
-		return
-	}
-	keyVersion, err := strconv.Atoi(strings.TrimSpace(r.Header.Get("X-File-Key-Version")))
-	if err != nil || keyVersion < 1 || keyVersion > 1000000 {
-		writeError(w, http.StatusBadRequest, "invalid E2E key version")
-		return
-	}
-	nonce, err := decodeE2EHeader(r.Header.Get("X-File-Nonce"), 12)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid E2E nonce")
-		return
-	}
-	mac, err := decodeE2EHeader(r.Header.Get("X-File-Mac"), 16)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid E2E authentication tag")
-		return
-	}
-	_ = nonce
-	_ = mac
-	if v := strings.TrimSpace(r.Header.Get("X-File-Crypto-Version")); v != "e2e:v1" {
-		writeError(w, http.StatusBadRequest, "unsupported E2E file version")
-		return
-	}
-	isImage := strings.EqualFold(strings.TrimSpace(r.Header.Get("X-File-Is-Image")), "true")
-	width, _ := strconv.Atoi(strings.TrimSpace(r.Header.Get("X-File-Width")))
-	height, _ := strconv.Atoi(strings.TrimSpace(r.Header.Get("X-File-Height")))
-	if width < 0 || height < 0 || int64(width)*int64(height) > maxImagePixels {
-		writeError(w, http.StatusBadRequest, "invalid image metadata")
-		return
-	}
-	if !isImage {
-		width = 0
-		height = 0
-	}
-	stored, err := os.CreateTemp(a.fileRoot, ".e2e-upload-*")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create encrypted upload")
-		return
-	}
-	tempPath := stored.Name()
-	defer os.Remove(tempPath)
-	written, err := io.Copy(stored, io.LimitReader(src, a.maxFileSize+1<<20))
-	if err != nil {
-		stored.Close()
-		writeError(w, http.StatusBadRequest, "failed to read encrypted upload")
-		return
-	}
-	if written > a.maxFileSize+1<<20 {
-		stored.Close()
-		writeError(w, http.StatusRequestEntityTooLarge, "encrypted file is too large")
-		return
-	}
-	if err := stored.Sync(); err != nil {
-		stored.Close()
-		writeError(w, http.StatusInternalServerError, "failed to finalize encrypted upload")
-		return
-	}
-	if err := stored.Close(); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to close encrypted upload")
-		return
-	}
-	thumb, _, err := r.FormFile("thumbnail")
-	thumbNonceText := strings.TrimSpace(r.Header.Get("X-File-Thumbnail-Nonce"))
-	thumbMacText := strings.TrimSpace(r.Header.Get("X-File-Thumbnail-Mac"))
-	thumbnailPath := ""
-	var thumbnailStoredSize int64
-	if thumb != nil {
-		if thumbNonceText == "" || thumbMacText == "" {
-			thumb.Close()
-			writeError(w, http.StatusBadRequest, "encrypted thumbnail authentication metadata missing")
-			return
-		}
-		if _, err := decodeE2EHeader(thumbNonceText, 12); err != nil {
-			thumb.Close()
-			writeError(w, http.StatusBadRequest, "invalid thumbnail nonce")
-			return
-		}
-		if _, err := decodeE2EHeader(thumbMacText, 16); err != nil {
-			thumb.Close()
-			writeError(w, http.StatusBadRequest, "invalid thumbnail authentication tag")
-			return
-		}
-	}
-	storageID := uuid.NewString()
-	dir := filepath.Join(a.fileRoot, storageID[:2])
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create file directory")
-		return
-	}
-	finalPath := filepath.Join(dir, storageID+".bin")
-	if err := os.Rename(tempPath, finalPath); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to store encrypted file")
-		return
-	}
-	if thumb != nil {
-		thumbnailPath = filepath.Join(dir, storageID+"-thumb.bin")
-		tf, err := os.Create(thumbnailPath)
-		if err != nil {
-			os.Remove(finalPath)
-			writeError(w, http.StatusInternalServerError, "failed to create encrypted thumbnail")
-			return
-		}
-		thumbnailWritten, copyErr := io.Copy(tf, io.LimitReader(thumb, a.maxFileSize+1<<20))
-		if copyErr != nil {
-			tf.Close()
-			os.Remove(finalPath)
-			os.Remove(thumbnailPath)
-			writeError(w, http.StatusBadRequest, "failed to store encrypted thumbnail")
-			return
-		}
-		if thumbnailWritten > a.maxFileSize+1<<20 {
-			tf.Close()
-			os.Remove(finalPath)
-			os.Remove(thumbnailPath)
-			writeError(w, http.StatusRequestEntityTooLarge, "encrypted thumbnail is too large")
-			return
-		}
-		thumbnailStoredSize = thumbnailWritten
-		if err = tf.Close(); err != nil {
-			os.Remove(finalPath)
-			os.Remove(thumbnailPath)
-			writeError(w, http.StatusInternalServerError, "failed to finalize encrypted thumbnail")
-			return
-		}
-	}
-	createdAt := time.Now().UTC().Format(time.RFC3339Nano)
-	tx, err := a.store.DB().Begin()
-	if err != nil {
-		os.Remove(finalPath)
-		if thumbnailPath != "" {
-			os.Remove(thumbnailPath)
-		}
-		writeError(w, http.StatusInternalServerError, "failed to start encrypted metadata transaction")
-		return
-	}
-	defer tx.Rollback()
-	var existingOwner, existingStatus string
-	err = tx.QueryRow(`SELECT owner_id,status FROM files WHERE id=?`, clientID).Scan(&existingOwner, &existingStatus)
-	if err == nil {
-		if existingOwner != owner {
-			os.Remove(finalPath)
-			if thumbnailPath != "" {
-				os.Remove(thumbnailPath)
-			}
-			writeError(w, http.StatusConflict, "client file id is already owned by another device")
-			return
-		}
-		if existingStatus == "ready" {
-			os.Remove(finalPath)
-			if thumbnailPath != "" {
-				os.Remove(thumbnailPath)
-			}
-			record, ferr := a.fileByID(clientID)
-			if ferr != nil || record.CryptoVersion != "e2e:v1" || record.CryptoScope != scope || record.SHA256 != sha || record.Size != plainSize {
-				writeError(w, http.StatusConflict, "client file id is already used for different E2E content")
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]any{"file": record.Attachment, "deduplicated": true})
-			return
-		}
-	} else if err != sql.ErrNoRows {
-		os.Remove(finalPath)
-		if thumbnailPath != "" {
-			os.Remove(thumbnailPath)
-		}
-		writeError(w, http.StatusInternalServerError, "failed to check encrypted file id")
-		return
-	}
-	var used int64
-	if err := tx.QueryRow(`SELECT COALESCE(SUM((CASE WHEN storage_size>0 THEN storage_size ELSE size END) + COALESCE(thumbnail_storage_size,0)),0) FROM files WHERE owner_id=? AND status='ready'`, owner).Scan(&used); err != nil {
-		os.Remove(finalPath)
-		if thumbnailPath != "" {
-			os.Remove(thumbnailPath)
-		}
-		writeError(w, http.StatusInternalServerError, "failed to calculate storage quota")
-		return
-	}
-	incomingStorage := written + thumbnailStoredSize
-	if written < 0 || thumbnailStoredSize < 0 || incomingStorage < written || incomingStorage > quotaFor(a, owner) || used > quotaFor(a, owner)-incomingStorage {
-		os.Remove(finalPath)
-		if thumbnailPath != "" {
-			os.Remove(thumbnailPath)
-		}
-		writeError(w, http.StatusRequestEntityTooLarge, "device storage quota exceeded")
-		return
-	}
-	_, err = tx.Exec(`INSERT INTO files(id,owner_id,original_name,content_type,size,sha256,storage_path,thumbnail_path,width,height,is_image,created_at,status,storage_size,thumbnail_storage_size,crypto_version,crypto_scope,crypto_key_version,crypto_nonce,crypto_mac,thumbnail_crypto_nonce,thumbnail_crypto_mac) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, clientID, owner, originalName, contentType, plainSize, sha, finalPath, thumbnailPath, width, height, boolToInt(isImage), createdAt, "ready", written, thumbnailStoredSize, "e2e:v1", scope, keyVersion, base64.RawURLEncoding.EncodeToString(nonce), base64.RawURLEncoding.EncodeToString(mac), thumbNonceText, thumbMacText)
-	if err != nil {
-		os.Remove(finalPath)
-		if thumbnailPath != "" {
-			os.Remove(thumbnailPath)
-		}
-		writeError(w, http.StatusInternalServerError, "failed to save encrypted file metadata")
-		return
-	}
-	if err := tx.Commit(); err != nil {
-		os.Remove(finalPath)
-		if thumbnailPath != "" {
-			os.Remove(thumbnailPath)
-		}
-		writeError(w, http.StatusInternalServerError, "failed to commit encrypted file metadata")
-		return
-	}
-	record, err := a.fileByID(clientID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read encrypted file metadata")
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"file": record.Attachment, "deduplicated": false})
-}
-
 func quotaFor(a *API, owner string) int64 { return a.deviceStorageQuota() }
 
 func (a *API) attachmentsForMessages(messageIDs []string) (map[string][]Attachment, error) {
@@ -1079,7 +779,7 @@ func (a *API) attachmentsForMessages(messageIDs []string) (map[string][]Attachme
 	for i, id := range ids {
 		args[i] = id
 	}
-	rows, err := a.store.DB().Query(`SELECT ma.message_id,f.id,f.owner_id,f.original_name,f.content_type,f.size,f.sha256,COALESCE(f.width,0),COALESCE(f.height,0),f.is_image,f.storage_path,COALESCE(f.thumbnail_path,''),f.created_at,f.status,COALESCE(f.crypto_version,''),COALESCE(f.crypto_scope,''),COALESCE(f.crypto_key_version,0),COALESCE(f.crypto_nonce,''),COALESCE(f.crypto_mac,''),COALESCE(f.thumbnail_crypto_nonce,''),COALESCE(f.thumbnail_crypto_mac,'') FROM message_attachments ma JOIN files f ON f.id=ma.file_id WHERE ma.message_id IN (`+placeholders+`) ORDER BY ma.message_id,ma.position,ma.file_id`, args...)
+	rows, err := a.store.DB().Query(`SELECT ma.message_id,f.id,f.owner_id,f.original_name,f.content_type,f.size,f.sha256,COALESCE(f.width,0),COALESCE(f.height,0),f.is_image,f.storage_path,COALESCE(f.thumbnail_path,''),f.created_at,f.status FROM message_attachments ma JOIN files f ON f.id=ma.file_id WHERE ma.message_id IN (`+placeholders+`) ORDER BY ma.message_id,ma.position,ma.file_id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1089,7 +789,7 @@ func (a *API) attachmentsForMessages(messageIDs []string) (map[string][]Attachme
 		var r fileRecord
 		var imageFlag int
 		var width, height sql.NullInt64
-		if err := rows.Scan(&messageID, &r.ID, &r.OwnerID, &r.OriginalName, &r.ContentType, &r.Size, &r.SHA256, &width, &height, &imageFlag, &r.StoragePath, &r.ThumbnailPath, &r.CreatedAt, &r.Status, &r.CryptoVersion, &r.CryptoScope, &r.CryptoKeyVersion, &r.CryptoNonce, &r.CryptoMac, &r.ThumbnailCryptoNonce, &r.ThumbnailCryptoMac); err != nil {
+		if err := rows.Scan(&messageID, &r.ID, &r.OwnerID, &r.OriginalName, &r.ContentType, &r.Size, &r.SHA256, &width, &height, &imageFlag, &r.StoragePath, &r.ThumbnailPath, &r.CreatedAt, &r.Status); err != nil {
 			return nil, err
 		}
 		if width.Valid {
@@ -1121,7 +821,7 @@ func (a *API) attachmentsForGroupMessages(messageIDs []string) (map[string][]Att
 	for i, id := range ids {
 		args[i] = id
 	}
-	rows, err := a.store.DB().Query(`SELECT ma.group_message_id,f.id,f.owner_id,f.original_name,f.content_type,f.size,f.sha256,COALESCE(f.width,0),COALESCE(f.height,0),f.is_image,f.storage_path,COALESCE(f.thumbnail_path,''),f.created_at,f.status,COALESCE(f.crypto_version,''),COALESCE(f.crypto_scope,''),COALESCE(f.crypto_key_version,0),COALESCE(f.crypto_nonce,''),COALESCE(f.crypto_mac,''),COALESCE(f.thumbnail_crypto_nonce,''),COALESCE(f.thumbnail_crypto_mac,'') FROM group_message_attachments ma JOIN files f ON f.id=ma.file_id WHERE ma.group_message_id IN (`+placeholders+`) ORDER BY ma.group_message_id,ma.position,ma.file_id`, args...)
+	rows, err := a.store.DB().Query(`SELECT ma.group_message_id,f.id,f.owner_id,f.original_name,f.content_type,f.size,f.sha256,COALESCE(f.width,0),COALESCE(f.height,0),f.is_image,f.storage_path,COALESCE(f.thumbnail_path,''),f.created_at,f.status FROM group_message_attachments ma JOIN files f ON f.id=ma.file_id WHERE ma.group_message_id IN (`+placeholders+`) ORDER BY ma.group_message_id,ma.position,ma.file_id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1131,7 +831,7 @@ func (a *API) attachmentsForGroupMessages(messageIDs []string) (map[string][]Att
 		var r fileRecord
 		var imageFlag int
 		var width, height sql.NullInt64
-		if err := rows.Scan(&messageID, &r.ID, &r.OwnerID, &r.OriginalName, &r.ContentType, &r.Size, &r.SHA256, &width, &height, &imageFlag, &r.StoragePath, &r.ThumbnailPath, &r.CreatedAt, &r.Status, &r.CryptoVersion, &r.CryptoScope, &r.CryptoKeyVersion, &r.CryptoNonce, &r.CryptoMac, &r.ThumbnailCryptoNonce, &r.ThumbnailCryptoMac); err != nil {
+		if err := rows.Scan(&messageID, &r.ID, &r.OwnerID, &r.OriginalName, &r.ContentType, &r.Size, &r.SHA256, &width, &height, &imageFlag, &r.StoragePath, &r.ThumbnailPath, &r.CreatedAt, &r.Status); err != nil {
 			return nil, err
 		}
 		if width.Valid {

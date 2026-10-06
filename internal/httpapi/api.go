@@ -26,10 +26,8 @@ import (
 )
 
 const (
-	maxDeviceName          = 64
-	maxMessageLen          = 16 * 1024
-	maxEncryptedMessageLen = 48 * 1024
-	directMessageEnvelope  = "e2e:v2:"
+	maxDeviceName = 64
+	maxMessageLen = 16 * 1024
 )
 
 type API struct {
@@ -57,6 +55,7 @@ type messageRate struct {
 }
 
 const messagesPerMinute = 120
+const maxFutureMessageSkew = 10 * time.Minute
 
 func New(s *store.Store) *API {
 	api, err := NewWithError(s)
@@ -237,58 +236,8 @@ func (a *API) Status(w http.ResponseWriter, r *http.Request) {
 }
 
 func validNetworkMessageBody(body string) bool {
-	return strings.HasPrefix(body, directMessageEnvelope) && len(body) <= maxEncryptedMessageLen
-}
-
-func validateDirectE2EEnvelope(body, senderID, recipientID, messageID string) error {
-	if !validNetworkMessageBody(body) {
-		return errors.New("direct messages must use e2e:v2")
-	}
-	raw := strings.TrimPrefix(body, directMessageEnvelope)
-	var envelope struct {
-		Version     int    `json:"version"`
-		Type        string `json:"type"`
-		SenderID    string `json:"sender_id"`
-		RecipientID string `json:"recipient_id"`
-		MessageID   string `json:"message_id"`
-		CreatedAt   string `json:"created_at"`
-		Nonce       string `json:"nonce"`
-		Ciphertext  string `json:"ciphertext"`
-		Mac         string `json:"mac"`
-	}
-	dec := json.NewDecoder(strings.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&envelope); err != nil {
-		return errors.New("invalid e2e:v2 envelope")
-	}
-	if envelope.Version != 2 || envelope.Type != "direct_message" ||
-		envelope.SenderID != senderID || envelope.RecipientID != recipientID ||
-		envelope.MessageID != messageID || envelope.CreatedAt == "" ||
-		envelope.Nonce == "" || envelope.Ciphertext == "" || envelope.Mac == "" {
-		return errors.New("e2e:v2 envelope identity binding is invalid")
-	}
-	if _, err := time.Parse(time.RFC3339Nano, envelope.CreatedAt); err != nil {
-		if _, err := time.Parse(time.RFC3339, envelope.CreatedAt); err != nil {
-			return errors.New("e2e:v2 envelope timestamp is invalid")
-		}
-	}
-	nonce, err := base64.RawURLEncoding.DecodeString(envelope.Nonce)
-	if err != nil || len(nonce) != 12 {
-		return errors.New("e2e:v2 nonce is invalid")
-	}
-	ciphertext, err := base64.RawURLEncoding.DecodeString(envelope.Ciphertext)
-	if err != nil || len(ciphertext) == 0 {
-		return errors.New("e2e:v2 ciphertext is invalid")
-	}
-	mac, err := base64.RawURLEncoding.DecodeString(envelope.Mac)
-	if err != nil || len(mac) != 16 {
-		return errors.New("e2e:v2 mac is invalid")
-	}
-	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
-		return errors.New("e2e:v2 envelope must contain one JSON object")
-	}
-	return nil
+	body = strings.TrimSpace(body)
+	return body != "" && len(body) <= maxMessageLen
 }
 
 func (a *API) RegisterDevice(w http.ResponseWriter, r *http.Request) {
@@ -451,12 +400,13 @@ func (a *API) IdentityKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	var rows *sql.Rows
 	var err error
-	if userID == "" {
-		// Preserve the pre-account device protocol for legacy deployments.
-		rows, err = a.store.DB().Query(`SELECT id,COALESCE(identity_public_key,''),COALESCE(identity_key_version,1) FROM devices WHERE id != ? AND COALESCE(status,'active')='active' ORDER BY id`, deviceID)
-	} else {
-		rows, err = a.store.DB().Query(`SELECT id,COALESCE(identity_public_key,''),COALESCE(identity_key_version,1) FROM devices WHERE id != ? AND user_id=? AND COALESCE(status,'active')='active' ORDER BY id`, deviceID, userID)
-	}
+	// Identity public keys are not account-private data: LocalLink uses them for
+	// authenticated local transport/session establishment. The endpoint remains
+	// authenticated and returns only active devices with registered keys.
+	// Account scoping here would break cross-account local transport because a
+	// recipient normally belongs to a different account.
+	_ = userID
+	rows, err = a.store.DB().Query(`SELECT id,COALESCE(identity_public_key,''),COALESCE(identity_key_version,1) FROM devices WHERE id != ? AND COALESCE(status,'active')='active' ORDER BY id`, deviceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list identity keys")
 		return
@@ -765,7 +715,16 @@ func (a *API) setPresence(deviceID string, serverConnected, wifiDirectConnected 
 		next.UpdatedAt = now
 	}
 	a.presenceMu.Lock()
-	changed := true
+	previous, existed := a.presence[deviceID]
+	changed := !existed || previous.ServerConnected != next.ServerConnected ||
+		previous.WiFiDirectConnected != next.WiFiDirectConnected ||
+		previous.LanAvailable != next.LanAvailable ||
+		previous.MeshAvailable != next.MeshAvailable ||
+		previous.LastCapabilityUpdate != next.LastCapabilityUpdate ||
+		previous.SigningPublicKey != next.SigningPublicKey ||
+		previous.WiFiControlCapable != next.WiFiControlCapable ||
+		previous.ManagedDevice != next.ManagedDevice ||
+		previous.WiFiEnabled != next.WiFiEnabled
 	a.presence[deviceID] = next
 	a.presenceMu.Unlock()
 	_, _ = a.store.DB().Exec(`UPDATE devices SET last_seen_at=? WHERE id=?`, now, deviceID)
@@ -810,10 +769,11 @@ func (a *API) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		ID            string   `json:"id"`
 		SenderID      string   `json:"sender_id"`
 		RecipientID   string   `json:"recipient_id"`
+		CreatedAt     string   `json:"created_at"`
 		Body          string   `json:"body"`
 		AttachmentIDs []string `json:"attachment_ids"`
 	}
-	if err := decodeJSON(r, &in, maxEncryptedMessageLen+8<<10); err != nil {
+	if err := decodeJSON(r, &in, maxMessageLen+8<<10); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -826,10 +786,6 @@ func (a *API) CreateMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.RecipientID == "" || len(in.RecipientID) > 128 || hasControlChars(in.RecipientID) {
 		writeError(w, http.StatusBadRequest, "invalid recipient id")
-		return
-	}
-	if err := validateDirectE2EEnvelope(in.Body, deviceID, in.RecipientID, in.ID); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if in.SenderID != "" && in.SenderID != deviceID {
@@ -857,7 +813,29 @@ func (a *API) CreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	m, existing, err := a.insertMessage(deviceID, in.RecipientID, in.Body, in.ID, in.AttachmentIDs)
+	if !validNetworkMessageBody(in.Body) && len(in.AttachmentIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "body or attachment is required")
+		return
+	}
+	createdAt := strings.TrimSpace(in.CreatedAt)
+	if createdAt == "" {
+		createdAt = time.Now().UTC().Format(time.RFC3339Nano)
+	} else {
+		parsed, parseErr := time.Parse(time.RFC3339Nano, createdAt)
+		if parseErr != nil {
+			parsed, parseErr = time.Parse(time.RFC3339, createdAt)
+		}
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid created_at")
+			return
+		}
+		if parsed.After(time.Now().UTC().Add(maxFutureMessageSkew)) {
+			writeError(w, http.StatusBadRequest, "created_at is too far in the future")
+			return
+		}
+		createdAt = parsed.UTC().Format(time.RFC3339Nano)
+	}
+	m, existing, err := a.insertMessageAt(deviceID, in.RecipientID, in.Body, createdAt, in.ID, in.AttachmentIDs)
 	if err != nil {
 		if strings.Contains(err.Error(), "attachment") || strings.Contains(err.Error(), "different message") || strings.Contains(err.Error(), "too many") {
 			writeError(w, http.StatusConflict, err.Error())

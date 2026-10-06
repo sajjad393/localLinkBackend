@@ -288,7 +288,7 @@ CREATE TABLE IF NOT EXISTS groups (
     owner_id TEXT NOT NULL REFERENCES devices(id),
     created_at TEXT NOT NULL,
     key_version INTEGER NOT NULL DEFAULT 1,
-    rekey_required INTEGER NOT NULL DEFAULT 1
+    rekey_required INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS group_members (
     group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
@@ -307,16 +307,6 @@ CREATE TABLE IF NOT EXISTS group_messages (
     server_seq INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_group_messages_seq ON group_messages(group_id, server_seq);
-CREATE TABLE IF NOT EXISTS group_key_envelopes (
-    group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-    key_version INTEGER NOT NULL,
-    sender_id TEXT NOT NULL REFERENCES devices(id),
-    recipient_device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-    envelope TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY(group_id, key_version, recipient_device_id)
-);
-CREATE INDEX IF NOT EXISTS idx_group_key_envelopes_recipient ON group_key_envelopes(recipient_device_id, group_id, key_version);
 CREATE TABLE IF NOT EXISTS sync_events (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id TEXT NOT NULL,
@@ -735,29 +725,17 @@ CREATE INDEX IF NOT EXISTS idx_group_message_attachments_file ON group_message_a
 		schemaVersion = 45
 	}
 
-	// Phase 46: group membership changes are cryptographically coupled to a
-	// server-side key epoch. A membership change advances the epoch and blocks
-	// group messages until the owner successfully distributes the new key.
+	// Phase 46 is retained as historical migration history only. Application
+	// payload encryption for groups has been retired; never purge plaintext
+	// group messages or require a cryptographic rekey during startup.
 	if schemaVersion < 46 {
 		if err := s.ensureColumn("groups", "key_version", "INTEGER NOT NULL DEFAULT 1"); err != nil {
 			return err
 		}
-		if err := s.ensureColumn("groups", "rekey_required", "INTEGER NOT NULL DEFAULT 1"); err != nil {
+		if err := s.ensureColumn("groups", "rekey_required", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 			return err
 		}
-		// Pre-AUDIT-014 group rows never had a server-known key epoch. Force
-		// every existing group through one fresh owner-side initialization.
-		if _, err := s.db.Exec(`UPDATE groups SET key_version=1, rekey_required=1`); err != nil {
-			return err
-		}
-		// Existing group-message bodies may contain plaintext. They cannot be
-		// safely re-encrypted by the server because the server must never learn
-		// the group key. Purge those legacy rows so the database contains only
-		// E2E-protected group message bodies after this migration.
-		if _, err := s.db.Exec(`DELETE FROM sync_events WHERE event_type='group_message' AND event_id IN (SELECT id FROM group_messages WHERE substr(body,1,7) <> 'gme:v1:')`); err != nil {
-			return err
-		}
-		if _, err := s.db.Exec(`DELETE FROM group_messages WHERE substr(body,1,7) <> 'gme:v1:'`); err != nil {
+		if _, err := s.db.Exec(`UPDATE groups SET rekey_required=0`); err != nil {
 			return err
 		}
 		if _, err := s.db.Exec(`INSERT OR IGNORE INTO schema_migrations(version) VALUES(46)`); err != nil {
@@ -1111,6 +1089,21 @@ func orderedMigrationSpecs() []orderedMigrationSpec {
 				updated_at TEXT NOT NULL
 			);
 			CREATE INDEX IF NOT EXISTS idx_admin_device_network_policies_updated ON admin_device_network_policies(updated_at);`)
+			return err
+		},
+	}, {
+		Version:     54,
+		Name:        "retire-group-payload-crypto",
+		Checksum:    "locallink-retire-group-payload-crypto-v1",
+		Predecessor: 53,
+		Apply: func(tx *sql.Tx) error {
+			// Group payloads are now plaintext application data. Keep the historical
+			// key-version columns for backward-compatible schema shape, but disable
+			// rekey state and remove the obsolete server-side envelope table.
+			if _, err := tx.Exec(`UPDATE groups SET rekey_required=0`); err != nil {
+				return err
+			}
+			_, err := tx.Exec(`DROP TABLE IF EXISTS group_key_envelopes`)
 			return err
 		},
 	}}

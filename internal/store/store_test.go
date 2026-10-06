@@ -91,7 +91,7 @@ func TestPhase43PurgesLegacyPeerKeysOnce(t *testing.T) {
 	}
 }
 
-func TestPhase46PurgesLegacyPlaintextGroupMessages(t *testing.T) {
+func TestPhase46PreservesLegacyPlaintextGroupMessages(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "locallink.db")
 	st, err := Open(dbPath)
@@ -102,7 +102,7 @@ func TestPhase46PurgesLegacyPlaintextGroupMessages(t *testing.T) {
 		st.Close()
 		t.Fatalf("insert device: %v", err)
 	}
-	if _, err := st.DB().Exec(`INSERT INTO groups(id,name,owner_id,created_at,key_version,rekey_required) VALUES('g','Legacy','a','now',1,1)`); err != nil {
+	if _, err := st.DB().Exec(`INSERT INTO groups(id,name,owner_id,created_at) VALUES('g','Legacy','a','now')`); err != nil {
 		st.Close()
 		t.Fatalf("insert group: %v", err)
 	}
@@ -139,21 +139,27 @@ func TestPhase46PurgesLegacyPlaintextGroupMessages(t *testing.T) {
 	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM group_messages WHERE id='legacy'`).Scan(&count); err != nil {
 		t.Fatalf("count legacy message: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("legacy plaintext group message count = %d, want 0", count)
+	if count != 1 {
+		t.Fatalf("legacy plaintext group message count = %d, want 1", count)
 	}
 	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM sync_events WHERE event_type='group_message' AND event_id='legacy'`).Scan(&count); err != nil {
 		t.Fatalf("count legacy sync event: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("legacy group sync event count = %d, want 0", count)
+	if count != 1 {
+		t.Fatalf("legacy group sync event count = %d, want 1", count)
 	}
 	var version int
 	if err := st.DB().QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("read schema version: %v", err)
 	}
-	if version < 46 {
-		t.Fatalf("schema version = %d, want >= 46", version)
+	if version < 54 {
+		t.Fatalf("schema version = %d, want >= 54", version)
+	}
+	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='group_key_envelopes'`).Scan(&count); err != nil {
+		t.Fatalf("count retired group-key table: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("group_key_envelopes table still exists")
 	}
 }
 

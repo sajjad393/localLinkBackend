@@ -24,7 +24,35 @@ type storedMessage struct {
 
 var errMessageRecipientOnly = errors.New("device is not message recipient")
 
+func normalizeMessageCreatedAt(value string) (string, bool) {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, strings.TrimSpace(value))
+	}
+	if err != nil {
+		return "", false
+	}
+	parsed = parsed.UTC()
+	if parsed.After(time.Now().UTC().Add(maxFutureMessageSkew)) {
+		return "", false
+	}
+	return parsed.Format(time.RFC3339Nano), true
+}
+
 func (a *API) insertMessage(senderID, recipientID, body, requestedID string, attachmentIDs []string) (storedMessage, bool, error) {
+	return a.insertMessageAt(senderID, recipientID, body, time.Now().UTC().Format(time.RFC3339Nano), requestedID, attachmentIDs)
+}
+
+func (a *API) insertMessageAt(senderID, recipientID, body, createdAt, requestedID string, attachmentIDs []string) (storedMessage, bool, error) {
+	createdAt = strings.TrimSpace(createdAt)
+	parsed, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, createdAt)
+	}
+	if err != nil {
+		return storedMessage{}, false, errors.New("invalid message created_at")
+	}
+	createdAt = parsed.UTC().Format(time.RFC3339Nano)
 	id := strings.TrimSpace(requestedID)
 	if id == "" {
 		id = uuid.NewString()
@@ -41,8 +69,8 @@ func (a *API) insertMessage(senderID, recipientID, body, requestedID string, att
 SELECT id,sender_id,recipient_id,body,created_at,status,COALESCE(delivered_at,''),COALESCE(server_seq,0)
 FROM messages WHERE id=?`, id).Scan(&existing.ID, &existing.SenderID, &existing.RecipientID, &existing.Body, &existing.CreatedAt, &existing.Status, &existing.DeliveredAt, &existing.ServerSeq)
 	if err == nil {
-		if existing.SenderID != senderID || existing.RecipientID != recipientID || existing.Body != body {
-			return existing, true, errors.New("message id already belongs to different message")
+		if existing.SenderID != senderID || existing.RecipientID != recipientID || existing.Body != body || existing.CreatedAt != createdAt {
+			return existing, true, errors.New("message id already belongs to different message metadata")
 		}
 		if len(attachmentIDs) > 0 {
 			existingIDs, err := a.attachmentIDsTx(tx, id, false)
@@ -75,10 +103,9 @@ FROM messages WHERE id=?`, id).Scan(&existing.ID, &existing.SenderID, &existing.
 	if err := tx.QueryRow("SELECT COALESCE(MAX(server_seq),0)+1 FROM messages").Scan(&seq); err != nil {
 		return storedMessage{}, false, err
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = tx.Exec(`
 INSERT INTO messages(id,sender_id,recipient_id,body,created_at,status,server_seq)
-VALUES(?,?,?,?,?,'sent',?)`, id, senderID, recipientID, body, now, seq)
+VALUES(?,?,?,?,?,'sent',?)`, id, senderID, recipientID, body, createdAt, seq)
 	if err != nil {
 		return storedMessage{}, false, err
 	}
@@ -86,7 +113,7 @@ VALUES(?,?,?,?,?,'sent',?)`, id, senderID, recipientID, body, now, seq)
 		return storedMessage{}, false, err
 	}
 
-	existing = storedMessage{ID: id, SenderID: senderID, RecipientID: recipientID, Body: body, CreatedAt: now, Status: "sent", ServerSeq: seq}
+	existing = storedMessage{ID: id, SenderID: senderID, RecipientID: recipientID, Body: body, CreatedAt: createdAt, Status: "sent", ServerSeq: seq}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO sync_events(device_id,event_type,event_id) VALUES(?,?,?)`, senderID, "message", id); err != nil {
 		return storedMessage{}, false, err
 	}

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LocalLink Admin</title>
+  <link rel="stylesheet" href="/admin/styles.css">
+</head>
+<body>
+  <div id="login" class="screen">
+    <div class="login-card">
+      <div class="brand">LocalLink</div>
+      <h1>Admin Panel</h1>
+      <p class="muted">Server administration console</p>
+      <form id="login-form">
+        <label>Username<input id="username" autocomplete="username" required></label>
+        <label>Password<input id="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit">Sign in</button>
+        <div id="login-error" class="error"></div>
+      </form>
+    </div>
+  </div>
+
+  <div id="app" class="hidden">
+    <header class="topbar">
+      <div><strong>LocalLink Admin</strong><span id="admin-role" class="pill"></span></div>
+      <button id="logout" class="secondary">Sign out</button>
+    </header>
+    <div class="layout">
+      <aside class="sidebar">
+        <button class="nav active" data-view="overview">Overview</button>
+        <button class="nav" data-view="users">Users</button>
+        <button class="nav" data-view="devices">Devices</button>
+        <button class="nav" data-view="groups">Groups</button>
+        <button class="nav" data-view="sessions">Sessions</button>
+        <button class="nav" data-view="security">Security</button>
+        <button class="nav" data-view="logs">Audit Log</button>
+      </aside>
+      <main class="content">
+        <div id="toast" class="toast"></div>
+        <section id="view-overview" class="view"></section>
+        <section id="view-users" class="view hidden"></section>
+        <section id="view-devices" class="view hidden"></section>
+        <section id="view-groups" class="view hidden"></section>
+        <section id="view-sessions" class="view hidden"></section>
+        <section id="view-security" class="view hidden"></section>
+        <section id="view-logs" class="view hidden"></section>
+      </main>
+    </div>
+  </div>
+  <script src="/admin/app.js" defer></script>
+</body>
+</html>

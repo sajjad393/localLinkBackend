@@ -30,6 +30,8 @@ type WSMessage struct {
 	TransportMode       string       `json:"transport_mode,omitempty"`
 	SelectedMediaCodec  string       `json:"selected_media_codec,omitempty"`
 	Error               string       `json:"error,omitempty"`
+	ErrorCode           string       `json:"error_code,omitempty"`
+	RetryAfter          int          `json:"retry_after,omitempty"`
 	DeviceID            string       `json:"device_id,omitempty"`
 	NetworkStatus       string       `json:"network_status,omitempty"`
 	ServerConnected     bool         `json:"server_connected,omitempty"`
@@ -144,7 +146,7 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 			switch msg.Type {
 			case "presence_update":
 				if !a.allowPresenceUpdate(deviceID) {
-					_ = client.WriteText(mustJSON(WSMessage{Type: "error", Error: "presence update rate limit exceeded"}))
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ErrorCode: "PRESENCE_RATE_LIMITED", Error: "presence update rate limit exceeded", RetryAfter: 30}))
 					continue
 				}
 				presence := DevicePresence{ServerConnected: true, WiFiDirectConnected: msg.WiFiDirectConnected, LanAvailable: msg.LanAvailable, MeshAvailable: msg.MeshAvailable, SigningPublicKey: msg.SigningPublicKey, WiFiControlCapable: msg.WiFiControlCapable, ManagedDevice: msg.ManagedDevice, WiFiEnabled: msg.WiFiEnabled}
@@ -167,7 +169,7 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if !a.allowCallSignaling(deviceID) {
-					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, Error: "call signaling rate limit exceeded"}))
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, ErrorCode: "CALL_SIGNAL_RATE_LIMITED", Error: "call signaling rate limit exceeded", RetryAfter: 30}))
 					continue
 				}
 				call, existing, err := a.createCall(deviceID, msg.RecipientID, msg.CallID)
@@ -190,7 +192,7 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if !a.allowCallSignaling(deviceID) {
-					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, Error: "call signaling rate limit exceeded"}))
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, ErrorCode: "CALL_SIGNAL_RATE_LIMITED", Error: "call signaling rate limit exceeded", RetryAfter: 30}))
 					continue
 				}
 				status := "ended"
@@ -241,7 +243,7 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if !a.allowCallHeartbeat(deviceID) {
-					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, Error: "call heartbeat rate limit exceeded"}))
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, ErrorCode: "CALL_HEARTBEAT_RATE_LIMITED", Error: "call heartbeat rate limit exceeded", RetryAfter: 30}))
 					continue
 				}
 				call, err := a.TouchCall(msg.CallID, deviceID)
@@ -267,8 +269,8 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 				a.hub.SendTo(m.SenderID, mustJSON(WSMessage{Type: "delivery_ack", ID: m.ID, SenderID: m.SenderID, RecipientID: m.RecipientID, Status: m.Status, CreatedAt: m.DeliveredAt, ServerSeq: m.ServerSeq, Attachments: m.Attachments}))
 			case "send_group_message":
 				createdAt, timestampOK := normalizeGroupMessageCreatedAt(msg.CreatedAt)
-				if strings.TrimSpace(msg.GroupID) == "" || !timestampOK || !strings.HasPrefix(msg.Body, "gme:v1:") || len(msg.Body) > maxEncryptedGroupMessageBody || len(msg.AttachmentIDs) > maxAttachmentsPerMessage {
-					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, Error: "encrypted group message, group_id and valid created_at are required; max 10 attachments"}))
+				if strings.TrimSpace(msg.GroupID) == "" || !timestampOK || (strings.TrimSpace(msg.Body) == "" && len(msg.AttachmentIDs) == 0) || len(msg.Body) > maxGroupMessageBody || len(msg.AttachmentIDs) > maxAttachmentsPerMessage {
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, Error: "group_id, valid created_at and body or attachment are required; max 10 attachments"}))
 					continue
 				}
 				if !a.isGroupMember(msg.GroupID, deviceID) {
@@ -276,7 +278,7 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if !a.allowMessage(deviceID) {
-					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, Error: "message rate limit exceeded"}))
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, ErrorCode: "MESSAGE_RATE_LIMITED", Error: "message rate limit exceeded", RetryAfter: 30}))
 					continue
 				}
 				m, existing, err := a.insertGroupMessage(deviceID, msg.GroupID, msg.Body, createdAt, msg.ID, msg.AttachmentIDs)
@@ -289,27 +291,28 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 					a.broadcastGroupMessage(m)
 				}
 			case "send_message":
-				if strings.TrimSpace(msg.ID) == "" || len(msg.ID) > 128 || hasControlChars(msg.ID) || strings.TrimSpace(msg.RecipientID) == "" || len(msg.RecipientID) > 128 || hasControlChars(msg.RecipientID) || (msg.Body == "" && len(msg.AttachmentIDs) == 0) || len(msg.AttachmentIDs) > maxAttachmentsPerMessage {
-					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, Error: "message id, recipient_id and encrypted body or attachments are required; max 10 attachments"}))
-					continue
-				}
-				if err := validateDirectE2EEnvelope(msg.Body, deviceID, msg.RecipientID, msg.ID); err != nil {
-					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, Error: err.Error()}))
+				if strings.TrimSpace(msg.ID) == "" || len(msg.ID) > 128 || hasControlChars(msg.ID) || strings.TrimSpace(msg.RecipientID) == "" || len(msg.RecipientID) > 128 || hasControlChars(msg.RecipientID) || (strings.TrimSpace(msg.Body) == "" && len(msg.AttachmentIDs) == 0) || len(msg.Body) > maxMessageLen || len(msg.AttachmentIDs) > maxAttachmentsPerMessage {
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, Error: "message id, recipient_id and body or attachments are required; max 10 attachments"}))
 					continue
 				}
 				if msg.SenderID != "" && msg.SenderID != deviceID {
-					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, Error: "sender_id does not match connection"}))
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, ErrorCode: "SENDER_ID_MISMATCH", Error: "sender_id does not match connection"}))
 					continue
 				}
 				if msg.RecipientID == deviceID || !a.deviceExists(msg.RecipientID) {
-					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, Error: "recipient device not found"}))
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, ErrorCode: "RECIPIENT_NOT_FOUND", Error: "recipient device not found"}))
 					continue
 				}
 				if !a.allowMessage(deviceID) {
-					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, Error: "message rate limit exceeded"}))
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, ErrorCode: "MESSAGE_RATE_LIMITED", Error: "message rate limit exceeded", RetryAfter: 30}))
 					continue
 				}
-				m, existing, err := a.insertMessage(deviceID, msg.RecipientID, msg.Body, msg.ID, msg.AttachmentIDs)
+				createdAt, timestampOK := normalizeMessageCreatedAt(msg.CreatedAt)
+				if !timestampOK {
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, Error: "valid created_at is required"}))
+					continue
+				}
+				m, existing, err := a.insertMessageAt(deviceID, msg.RecipientID, msg.Body, createdAt, msg.ID, msg.AttachmentIDs)
 				if err != nil {
 					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, Error: err.Error()}))
 					continue

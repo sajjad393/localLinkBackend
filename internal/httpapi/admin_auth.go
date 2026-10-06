@@ -52,6 +52,110 @@ func (a *API) ensureBootstrapAdmin() error {
 	return err
 }
 
+func (a *API) ResetAdminCredentials() error {
+	username := strings.ToLower(strings.TrimSpace(os.Getenv("LOCALLINK_ADMIN_BOOTSTRAP_USERNAME")))
+	password := os.Getenv("LOCALLINK_ADMIN_BOOTSTRAP_PASSWORD")
+
+	if username == "" {
+		return errors.New("LOCALLINK_ADMIN_BOOTSTRAP_USERNAME is required")
+	}
+	if len(password) < 12 {
+		return errors.New("LOCALLINK_ADMIN_BOOTSTRAP_PASSWORD must be at least 12 characters")
+	}
+	if hasControlChars(password) {
+		return errors.New("LOCALLINK_ADMIN_BOOTSTRAP_PASSWORD contains invalid control characters")
+	}
+
+	salt := make([]byte, passwordSaltLength)
+	if _, err := rand.Read(salt); err != nil {
+		return err
+	}
+
+	hash := derivePasswordKey(password, salt, passwordIterations)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+
+	tx, err := a.store.DB().Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var adminID string
+
+	err = tx.QueryRow(
+		`SELECT id FROM admin_accounts WHERE username=? LIMIT 1`,
+		username,
+	).Scan(&adminID)
+
+	if err == sql.ErrNoRows {
+		adminID = uuid.NewString()
+
+		_, err = tx.Exec(`
+			INSERT INTO admin_accounts(
+				id,
+				username,
+				password_salt,
+				password_hash,
+				password_iterations,
+				role,
+				status,
+				created_at,
+				updated_at
+			)
+			VALUES(?,?,?,?,?,'owner','active',?,?)
+		`,
+			adminID,
+			username,
+			base64.RawURLEncoding.EncodeToString(salt),
+			base64.RawURLEncoding.EncodeToString(hash),
+			passwordIterations,
+			now,
+			now,
+		)
+		if err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	} else {
+		_, err = tx.Exec(`
+			UPDATE admin_accounts
+			SET
+				password_salt=?,
+				password_hash=?,
+				password_iterations=?,
+				role='owner',
+				status='active',
+				updated_at=?
+			WHERE id=?
+		`,
+			base64.RawURLEncoding.EncodeToString(salt),
+			base64.RawURLEncoding.EncodeToString(hash),
+			passwordIterations,
+			now,
+			adminID,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Revoke existing admin sessions after a credential reset.
+	if _, err := tx.Exec(
+		`UPDATE admin_sessions SET revoked_at=? WHERE admin_id=? AND revoked_at IS NULL`,
+		now,
+		adminID,
+	); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (a *API) AdminLogin(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Username string `json:"username"`
