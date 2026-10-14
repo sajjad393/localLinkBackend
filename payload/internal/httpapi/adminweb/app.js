@@ -484,9 +484,12 @@
   async function mountView(viewId, options) {
     const opts = options || {};
     const view = LL.views[viewId] || LL.views.dashboard;
+    // Poll refreshes patch data in place: no full unmount, no chart teardown,
+    // and never closing an overlay the operator may be using.
+    const canPatch = opts.refresh && typeof view.refresh === 'function';
     state.view = viewId;
-    closeOverlays();
-    LL.charts.reset();
+    if (!canPatch) closeOverlays();
+    if (!canPatch) LL.charts.reset();
 
     const restricted = view.roles && view.roles.indexOf(state.session.role) < 0;
     $('crumb-view').textContent = view.title;
@@ -517,6 +520,15 @@
       refresh: () => mountView(state.view),
       navigate: (id) => mountView(id),
     };
+
+    if (canPatch) {
+      try {
+        if (await view.refresh(target, context)) return;
+      } catch (err) {
+        // A failed patch falls through to the normal (quiet) mount path;
+        // the operator loses nothing either way.
+      }
+    }
 
     const previous = target.innerHTML;
     if (!opts.quiet) target.innerHTML = ui.skeletonPanel(5);
@@ -828,6 +840,9 @@
 
     if (target.hasAttribute('data-action')) {
       const action = target.getAttribute('data-action');
+      // Quick-action cards navigate; without this branch they sat there and
+      // did nothing when clicked.
+      if (action.indexOf('nav:') === 0) { mountView(action.slice(4)); return; }
       if (action === 'backup') {
         const confirmed = await confirmDialog({
           title: 'Create database backup', confirmLabel: 'Create backup',
@@ -987,7 +1002,7 @@
       loadNotifications();
 
       refreshSummary();
-      if (state.view === 'dashboard') mountView('dashboard', { quiet: true });
+      if (state.view === 'dashboard') mountView('dashboard', { quiet: true, refresh: true });
     }, pollIntervalMs());
   }
 

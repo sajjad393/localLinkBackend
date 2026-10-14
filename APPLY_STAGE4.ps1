@@ -2,7 +2,7 @@
 # LocalLink admin - repair the repository and add conversation review
 #
 # What this script does, in order:
-#   1. Copies the 26 files in the payload folder to their real paths inside
+#   1. Copies every file in the payload folder to its real path inside
 #      your repository (the new admin console, its backend, and the new
 #      owner-only Conversations module).
 #   2. Moves the leftover changed-files folder out of the repository. That
@@ -72,7 +72,8 @@ foreach ($file in $mirrors) {
     $copied += 1
 }
 Write-Host ("  Copied " + $copied + " file(s) into the repository.")
-if ($copied -ne 26) { $failures.Add("copy: expected 26 files, copied $copied") }
+$expected = ($mirrors | Measure-Object).Count
+if ($copied -ne $expected) { $failures.Add("copy: expected $expected files, copied $copied") }
 
 # --------------------------------------------- 2. move the mirror folder out
 $mirror = Join-Path $Repo "changed-files"

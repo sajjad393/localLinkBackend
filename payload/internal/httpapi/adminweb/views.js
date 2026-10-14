@@ -99,6 +99,12 @@ LL.views = {};
   }
 
   // ------------------------------------------------------------------ dashboard
+  // A poll refresh replaces only the regions whose content actually changed,
+  // so every live piece of the dashboard carries an explicit marker.
+  function pollRegion(id, html) {
+    return `<div data-poll-region="${id}">${html}</div>`;
+  }
+
   const dashboard = {
     id: 'dashboard',
     title: 'Dashboard',
@@ -140,7 +146,7 @@ LL.views = {};
       const parts = [];
 
       // ---- header
-      parts.push(`<div class="section-head">
+      parts.push(pollRegion('header', `<div class="section-head">
         <div class="grow">
           <h1 class="type-page-title">Overview</h1>
           <span class="sub">${analytics.ok && analytics.data.generated_at
@@ -151,7 +157,7 @@ LL.views = {};
           ${ui.badge('Range: ' + ui.esc(range), 'primary')}
           ${ui.statusBadge(overall, { label: 'Overall: ' + ui.statusInfo(overall).label })}
         </div>
-      </div>`);
+      </div>`))
 
       // ---- metric area
       const metricCards = [];
@@ -195,7 +201,7 @@ LL.views = {};
           <p>${ui.esc(summary.error || 'The summary endpoint did not respond.')}</p>
           <button class="btn btn-sm" data-retry="dashboard">${ui.icon('i-refresh')}Retry</button></div>`);
       }
-      parts.push(`<div class="grid grid-metrics">${metricCards.join('')}</div>`);
+      parts.push(pollRegion('metrics', `<div class="grid grid-metrics">${metricCards.join('')}</div>`));
 
       // ---- analytics
       const messagePoints = seriesToList(series.messages, longRange);
@@ -216,13 +222,13 @@ LL.views = {};
           ? chartCanvas({ type: 'line', options: { points: bytePoints, color: ui.token('info', '#0b5fa5'), height: 200, xLabelCount: 6, longRange } }, 200)
           : ui.emptyState({ icon: 'i-activity', title: 'No response traffic', message: 'No bytes were served during the selected period.' }));
 
-      parts.push(`<section class="section">
+      parts.push(pollRegion('analytics', `<section class="section">
         ${ui.sectionHead({ title: 'Activity analytics', subtitle: 'Rollups computed from platform tables and the runtime sampler', icon: 'i-activity', actions: rangeSelector })}
         <div class="split-3-2">
           ${ui.panel({ title: 'Message activity', subtitle: 'Messages accepted by the server per bucket', body: messageChart })}
           ${ui.panel({ title: 'Server traffic', subtitle: runtimeAvailable ? 'Response bytes served per bucket' : 'Requires the runtime metrics sampler', body: byteChart })}
         </div>
-      </section>`);
+      </section>`))
 
       // ---- health
       const gaugeKeys = ['cpu', 'memory', 'storage'];
@@ -247,10 +253,10 @@ LL.views = {};
             </div>`
           : ui.emptyState({ icon: 'i-pulse', title: 'No health readings', message: 'The server did not return subsystem readings for this request.' }));
 
-      parts.push(`<section class="section">
+      parts.push(pollRegion('health', `<section class="section">
         ${ui.sectionHead({ title: 'Server health', subtitle: 'Percentages are live readings; the tick marks the alert threshold', icon: 'i-pulse', actions: ui.statusBadge(overall) })}
         ${ui.panel({ body: healthBody })}
-      </section>`);
+      </section>`))
 
       // ---- network + security
       let networkBody;
@@ -314,7 +320,7 @@ LL.views = {};
           </div>` : ''}`;
       }
 
-      parts.push(`<div class="section">
+      parts.push(pollRegion('netsec', `<div class="section">
         <div class="split-1-1">
           ${ui.panel({
             title: 'Live network', subtitle: 'Transport state reported by connected devices',
@@ -328,21 +334,21 @@ LL.views = {};
             body: securityBody,
           })}
         </div>
-      </div>`);
+      </div>`))
 
       // ---- activity
       const timelineEntries = activityEvents.map((e) => ({
         title: e.title, detail: e.detail, timestamp: e.created_at, severity: e.severity,
         icon: activityIcon(e.type),
       }));
-      parts.push(ui.panel({
+      parts.push(pollRegion('activity', ui.panel({
         title: 'Recent activity',
         subtitle: 'Newest first, merged across users, devices, files, calls and audit sources',
         actions: `<button class="btn btn-sm" data-nav="audit">Open audit log</button>`,
         body: !activity.ok
           ? ui.errorState(activity.error, 'dashboard')
           : ui.timeline(timelineEntries, { max: 10, emptyMessage: 'No operational events have been recorded on this server yet.' }),
-      }));
+      })));
 
       // ---- quick actions
       const actions = [
@@ -358,19 +364,52 @@ LL.views = {};
       if (ctx.can('backup')) actions.push({ id: 'backup', label: 'Create backup', icon: 'i-backup' });
       // Trim the list to what this role may actually open.
       const permitted = actions.filter((a) => !LL.moduleRoles[a.id] || LL.moduleRoles[a.id].indexOf(ctx.role) >= 0);
-      parts.push(`<section class="section">
+      parts.push(pollRegion('actions', `<section class="section">
         ${ui.sectionHead({ title: 'Quick actions', subtitle: 'Only actions your admin role permits', icon: 'i-flag' })}
         <div class="grid grid-actions">${permitted.map((a) => ui.quickAction({
           label: a.label, icon: a.icon, action: a.id === 'backup' ? 'backup' : 'nav:' + a.id,
         })).join('')}</div>
-      </section>`);
+      </section>`))
 
-      parts.push(ui.note('Message review is switched on',
+      parts.push(pollRegion('note', ui.note('Message review is switched on',
         'The owner role can read message bodies in the Conversations module, and every conversation opened there is recorded in the audit log. Passwords, private keys, call audio, decrypted media and file contents stay out of this console.',
-        'i-lock'));
+ 'i-lock')));
 
       el.innerHTML = parts.join('');
       afterRender(el);
+    },
+    // Poll refresh: patch data into the live DOM instead of rebuilding the
+    // whole dashboard. It renders the same markup through the real mount into
+    // a detached tree (so the two render paths can never drift apart), then
+    // swaps in only the regions whose content actually changed. Canvases,
+    // scroll position and hover state in untouched regions simply survive.
+    // Returns true when the refresh was applied; false asks the shell to do a
+    // normal mount instead (first paint, or an error state).
+    async refresh(el, ctx) {
+      if (!el.querySelector('[data-poll-region]')) return false;
+      const stage = window.document.createElement('div');
+      await this.mount(stage, ctx);
+      if (!stage.querySelector('[data-poll-region]')) return false;
+      const liveRegions = {};
+      el.querySelectorAll('[data-poll-region]').forEach((node) => {
+        liveRegions[node.getAttribute('data-poll-region')] = node;
+      });
+      const changed = [];
+      stage.querySelectorAll('[data-poll-region]').forEach((fresh) => {
+        const id = fresh.getAttribute('data-poll-region');
+        const live = liveRegions[id];
+        if (!live) return;                     // structure shifted — leave it to a normal mount
+        delete liveRegions[id];
+        if (live.innerHTML !== fresh.innerHTML) {
+          live.innerHTML = fresh.innerHTML;
+          changed.push(live);
+        }
+      });
+      if (changed.length) {
+        if (LL.charts && typeof LL.charts.prune === 'function') LL.charts.prune();
+        changed.forEach((region) => afterRender(region));
+      }
+      return true;
     },
   };
 
