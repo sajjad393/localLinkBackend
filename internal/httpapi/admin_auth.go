@@ -271,7 +271,15 @@ func adminPermission(role, permission string) bool {
 }
 
 func (a *API) requireAdminPermission(w http.ResponseWriter, r *http.Request, permission string) (AdminAccount, bool) {
-	if !a.allowSecurityAction("admin-ip", registrationKey(r), maxAdminAttemptsPerMinute) {
+	// Credentialled requests get the console polling budget; anonymous probes
+	// keep the tighter brute-force cap. The two counters are separate buckets so
+	// neither ceiling is consumed by the other's traffic — both remain per
+	// source address per minute.
+	bucket, limit := "admin-ip", maxAdminAttemptsPerMinute
+	if strings.TrimSpace(r.Header.Get("Authorization")) != "" || strings.TrimSpace(r.Header.Get("X-Admin-Token")) != "" {
+		bucket, limit = "admin-authed-ip", maxAdminAuthedRequestsPerMin
+	}
+	if !a.allowSecurityAction(bucket, registrationKey(r), limit) {
 		w.Header().Set("Retry-After", "60")
 		writeError(w, 429, "admin rate limit exceeded")
 		return AdminAccount{}, false

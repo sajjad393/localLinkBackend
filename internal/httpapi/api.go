@@ -47,6 +47,8 @@ type API struct {
 	presence         map[string]DevicePresence
 	runtimeMu        sync.RWMutex
 	runtimeProvider  func() map[string]any
+	resMu            sync.Mutex
+	resHistory       []resourceSample
 }
 
 type messageRate struct {

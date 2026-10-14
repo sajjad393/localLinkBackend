@@ -70,14 +70,16 @@ func Start(serverAddr string, name string, port int) (func(), error) {
 			if strings.TrimSpace(string(buf[:n])) != Request {
 				continue
 			}
+			markQuery()
 			if _, err := conn.WriteToUDP(response, remote); err != nil {
 				log.Printf("discovery response error: %v", err)
 			}
 		}
 	}()
 
+	markStarted(discoveryPort, name, protocol)
 	log.Printf("LAN discovery listening on UDP :%d (host=%s)", discoveryPort, localHost)
-	return func() { _ = conn.Close() }, nil
+	return func() { markStopped(); _ = conn.Close() }, nil
 }
 
 func httpPort(serverAddr string) int {

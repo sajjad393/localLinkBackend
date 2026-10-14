@@ -11,8 +11,13 @@ import (
 )
 
 const (
-	maxLoginAttemptsPerMinute     = 10
+	maxLoginAttemptsPerMinute = 10
+	// Anonymous admin requests (wrong or missing credentials) are tightly
+	// capped to blunt credential probing. Requests that present a credential
+	// are treated separately because a signed-in console legitimately reads
+	// several endpoints per refresh cycle and polls on an interval.
 	maxAdminAttemptsPerMinute     = 30
+	maxAdminAuthedRequestsPerMin  = 240
 	maxSensitiveAttemptsPerMinute = 12
 	loginFailureThreshold         = 8
 	loginLockDuration             = 15 * time.Minute

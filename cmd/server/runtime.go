@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"runtime/debug"
+	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -22,16 +24,92 @@ type runtimeMetrics struct {
 	serverErrs atomic.Uint64
 	panics     atomic.Uint64
 	active     atomic.Int64
+	bytesOut   atomic.Uint64
+	buckets    *hourlyBuckets
 }
 
 func newRuntimeMetrics() *runtimeMetrics {
-	return &runtimeMetrics{startedAt: time.Now().UTC()}
+	return &runtimeMetrics{startedAt: time.Now().UTC(), buckets: newHourlyBuckets()}
+}
+
+// hourlyBuckets keeps 90 days of hourly request/error/byte counters so the
+// admin dashboard can chart error-rate and traffic trends from real traffic.
+// Response bytes are counted for HTTP responses; hijacked WebSocket
+// connections are not included.
+type hourlyBuckets struct {
+	mu     sync.Mutex
+	values map[int64]bucketCounters
+	pruned time.Time
+}
+
+type bucketCounters struct {
+	Requests     uint64
+	ClientErrors uint64
+	ServerErrors uint64
+	BytesOut     uint64
+}
+
+const bucketRetention = 90 * 24 * time.Hour
+
+func newHourlyBuckets() *hourlyBuckets {
+	return &hourlyBuckets{values: make(map[int64]bucketCounters)}
+}
+
+func (b *hourlyBuckets) record(when time.Time, status int, bytes int64) {
+	slot := when.UTC().Truncate(time.Hour).Unix()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	counters := b.values[slot]
+	counters.Requests++
+	switch {
+	case status >= 500:
+		counters.ServerErrors++
+	case status >= 400:
+		counters.ClientErrors++
+	}
+	if bytes > 0 {
+		counters.BytesOut += uint64(bytes)
+	}
+	b.values[slot] = counters
+	if when.Sub(b.pruned) > time.Hour {
+		b.pruned = when
+		cutoff := when.UTC().Add(-bucketRetention).Unix()
+		for key := range b.values {
+			if key < cutoff {
+				delete(b.values, key)
+			}
+		}
+	}
+}
+
+func (b *hourlyBuckets) snapshot() []map[string]any {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	keys := make([]int64, 0, len(b.values))
+	for key := range b.values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	out := make([]map[string]any, 0, len(keys))
+	for _, key := range keys {
+		counters := b.values[key]
+		out = append(out, map[string]any{
+			"t":             time.Unix(key, 0).UTC().Format(time.RFC3339),
+			"requests":      counters.Requests,
+			"client_errors": counters.ClientErrors,
+			"server_errors": counters.ServerErrors,
+			"errors":        counters.ClientErrors + counters.ServerErrors,
+			"bytes_out":     counters.BytesOut,
+		})
+	}
+	return out
 }
 
 type statusRecordingWriter struct {
 	http.ResponseWriter
 	status int
 	wrote  bool
+	bytes  int64
 }
 
 func (w *statusRecordingWriter) WriteHeader(status int) {
@@ -47,7 +125,9 @@ func (w *statusRecordingWriter) Write(body []byte) (int, error) {
 	if !w.wrote {
 		w.WriteHeader(http.StatusOK)
 	}
-	return w.ResponseWriter.Write(body)
+	n, err := w.ResponseWriter.Write(body)
+	w.bytes += int64(n)
+	return n, err
 }
 
 func (w *statusRecordingWriter) Flush() {
@@ -92,6 +172,8 @@ func requestLogging(metrics *runtimeMetrics, next http.Handler) http.Handler {
 		case status >= 200:
 			metrics.successes.Add(1)
 		}
+		metrics.bytesOut.Add(uint64(recorder.bytes))
+		metrics.buckets.record(time.Now().UTC(), status, recorder.bytes)
 		log.Printf("request id=%s method=%s path=%s status=%d duration=%s", requestID, r.Method, r.URL.Path, status, time.Since(start))
 	})
 }
@@ -153,5 +235,7 @@ func (m *runtimeMetrics) snapshot() map[string]any {
 		"server_errors":    m.serverErrs.Load(),
 		"recovered_panics": m.panics.Load(),
 		"active_requests":  m.active.Load(),
+		"bytes_out":        m.bytesOut.Load(),
+		"buckets":          m.buckets.snapshot(),
 	}
 }
