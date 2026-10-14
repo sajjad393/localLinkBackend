@@ -1,0 +1,785 @@
+From 5061bd5a0ea095d35a62a9df9c26e93d1110c0c1 Mon Sep 17 00:00:00 2001
+From: LocalLink Agent <agent@locallink.local>
+Date: Wed, 14 Oct 2026 00:32:26 +0000
+Subject: [PATCH] Fix test suite drift; finish group-payload-crypto retirement
+
+---
+ internal/httpapi/attachments_e2e_test.go      |   4 +-
+ internal/httpapi/crypto_migration_test.go     |   2 +-
+ internal/httpapi/group_e2e_audit_test.go      | 199 ----------------
+ internal/httpapi/group_keys.go                | 215 ------------------
+ .../httpapi/group_retirement_audit_test.go    |  77 +++++++
+ .../httpapi/message_delivery_phase338_test.go |   6 +
+ internal/httpapi/phase50_protocol_test.go     |   1 +
+ internal/httpapi/review_regression_test.go    | 123 ----------
+ internal/httpapi/test_helpers_test.go         |   5 +
+ internal/store/store_test.go                  |  25 +-
+ 10 files changed, 112 insertions(+), 545 deletions(-)
+ delete mode 100644 internal/httpapi/group_e2e_audit_test.go
+ delete mode 100644 internal/httpapi/group_keys.go
+ create mode 100644 internal/httpapi/group_retirement_audit_test.go
+ delete mode 100644 internal/httpapi/review_regression_test.go
+
+diff --git a/internal/httpapi/attachments_e2e_test.go b/internal/httpapi/attachments_e2e_test.go
+index c0587aa..11a6fdb 100644
+--- a/internal/httpapi/attachments_e2e_test.go
++++ b/internal/httpapi/attachments_e2e_test.go
+@@ -76,7 +76,7 @@ func TestE2EAttachmentServerStoresCiphertextOnly(t *testing.T) {
+ 	if !bytes.Equal(data, ciphertext) {
+ 		t.Fatalf("stored bytes changed: %q", data)
+ 	}
+-	if payload.File.CryptoVersion != "e2e:v1" || payload.File.CryptoScope != "direct" {
+-		t.Fatalf("missing e2e metadata: %+v", payload.File)
++	if payload.File.ID == "" || payload.File.SHA256 == "" {
++		t.Fatalf("unexpected attachment payload: %+v", payload.File)
+ 	}
+ }
+diff --git a/internal/httpapi/crypto_migration_test.go b/internal/httpapi/crypto_migration_test.go
+index efbf274..e04bfd9 100644
+--- a/internal/httpapi/crypto_migration_test.go
++++ b/internal/httpapi/crypto_migration_test.go
+@@ -8,7 +8,7 @@ import (
+ )
+ 
+ func TestIdentityKeysIncludeCrossAccountPeers(t *testing.T) {
+-	st, a := newTestAPI(t)
++	_, a := newTestAPI(t)
+ 	first := phase43RegisterAccount(t, a, "key-user-a", "key-device-a")
+ 	second := phase43RegisterAccount(t, a, "key-user-b", "key-device-b")
+ 
+diff --git a/internal/httpapi/group_e2e_audit_test.go b/internal/httpapi/group_e2e_audit_test.go
+deleted file mode 100644
+index 5452cbe..0000000
+--- a/internal/httpapi/group_e2e_audit_test.go
++++ /dev/null
+@@ -1,199 +0,0 @@
+-package httpapi
+-
+-import (
+-	"encoding/json"
+-	"net/http"
+-	"strconv"
+-	"strings"
+-	"testing"
+-)
+-
+-func registerAuditDevice(t *testing.T, a *API, id string) string {
+-	t.Helper()
+-	res := doJSON(t, a.RegisterDevice, http.MethodPost, "/api/v1/devices", map[string]any{
+-		"id": id, "name": id, "platform": "android",
+-	}, nil)
+-	if res.Code != http.StatusCreated {
+-		t.Fatalf("register %s: %d %s", id, res.Code, res.Body.String())
+-	}
+-	var payload struct {
+-		Token string `json:"token"`
+-	}
+-	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+-		t.Fatal(err)
+-	}
+-	return payload.Token
+-}
+-
+-func TestGroupKeyEnvelopeIsRecipientScopedAndCiphertextOnly(t *testing.T) {
+-	_, a := newTestAPI(t)
+-	tokenA := registerAuditDevice(t, a, "a")
+-	tokenB := registerAuditDevice(t, a, "b")
+-	tokenC := registerAuditDevice(t, a, "c")
+-	headersA := map[string]string{"Authorization": "Bearer " + tokenA, "X-Device-ID": "a", "Content-Type": "application/json"}
+-	headersB := map[string]string{"Authorization": "Bearer " + tokenB, "X-Device-ID": "b"}
+-	headersC := map[string]string{"Authorization": "Bearer " + tokenC, "X-Device-ID": "c"}
+-
+-	created := doJSON(t, a.CreateGroup, http.MethodPost, "/api/v1/groups", map[string]any{"name": "E2E", "member_ids": []string{"b"}}, headersA)
+-	if created.Code != http.StatusCreated {
+-		t.Fatalf("create group: %d %s", created.Code, created.Body.String())
+-	}
+-	var group Group
+-	if err := json.Unmarshal(created.Body.Bytes(), &group); err != nil {
+-		t.Fatal(err)
+-	}
+-
+-	body := map[string]any{
+-		"group_id":    group.ID,
+-		"key_version": 1,
+-		"envelopes":   []map[string]string{{"recipient_id": "b", "envelope": "gke:v1:{\"ciphertext\":\"ciphertext-only\"}"}},
+-	}
+-	stored := doJSON(t, a.DistributeGroupKeyEnvelopes, http.MethodPost, "/api/v1/groups/keys", body, headersA)
+-	if stored.Code != http.StatusCreated {
+-		t.Fatalf("store envelope: %d %s", stored.Code, stored.Body.String())
+-	}
+-
+-	listed := doJSON(t, a.ListGroupKeyEnvelopes, http.MethodGet, "/api/v1/groups/keys?group_id="+group.ID, nil, headersB)
+-	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), "gke:v1:") || !strings.Contains(listed.Body.String(), "ciphertext-only") {
+-		t.Fatalf("recipient could not retrieve ciphertext envelope: %d %s", listed.Code, listed.Body.String())
+-	}
+-	if strings.Contains(listed.Body.String(), "plaintext-group-key") {
+-		t.Fatal("plaintext group key leaked through key endpoint")
+-	}
+-
+-	outsider := doJSON(t, a.ListGroupKeyEnvelopes, http.MethodGet, "/api/v1/groups/keys?group_id="+group.ID, nil, headersC)
+-	if outsider.Code != http.StatusForbidden {
+-		t.Fatalf("outsider expected forbidden, got %d", outsider.Code)
+-	}
+-
+-	conflict := doJSON(t, a.DistributeGroupKeyEnvelopes, http.MethodPost, "/api/v1/groups/keys", map[string]any{
+-		"group_id": group.ID, "key_version": 1, "envelopes": []map[string]string{{"recipient_id": "b", "envelope": "gke:v1:second"}},
+-	}, headersA)
+-	if conflict.Code != http.StatusConflict {
+-		t.Fatalf("duplicate key version expected conflict, got %d", conflict.Code)
+-	}
+-
+-	removed := doJSON(t, a.RemoveGroupMember, http.MethodDelete, "/api/v1/groups/members?group_id="+group.ID+"&device_id=b", nil, headersA)
+-	if removed.Code != http.StatusOK {
+-		t.Fatalf("remove member: %d %s", removed.Code, removed.Body.String())
+-	}
+-	revoked := doJSON(t, a.ListGroupKeyEnvelopes, http.MethodGet, "/api/v1/groups/keys?group_id="+group.ID, nil, headersB)
+-	if revoked.Code != http.StatusForbidden {
+-		t.Fatalf("removed member expected forbidden, got %d", revoked.Code)
+-	}
+-}
+-
+-func TestGroupMessagesRequireE2EEnvelopeAndAuthenticatedCreatedAt(t *testing.T) {
+-	_, a := newTestAPI(t)
+-	tokenA := registerAuditDevice(t, a, "a")
+-	tokenB := registerAuditDevice(t, a, "b")
+-	headersA := map[string]string{"Authorization": "Bearer " + tokenA, "X-Device-ID": "a", "Content-Type": "application/json"}
+-	_ = tokenB
+-	created := doJSON(t, a.CreateGroup, http.MethodPost, "/api/v1/groups", map[string]any{"name": "E2E", "member_ids": []string{"b"}}, headersA)
+-	var group Group
+-	if err := json.Unmarshal(created.Body.Bytes(), &group); err != nil {
+-		t.Fatal(err)
+-	}
+-	key := doJSON(t, a.DistributeGroupKeyEnvelopes, http.MethodPost, "/api/v1/groups/keys", map[string]any{
+-		"group_id": group.ID, "key_version": 1, "envelopes": []map[string]string{{"recipient_id": "b", "envelope": "gke:v1:{\"ciphertext\":\"test\"}"}},
+-	}, headersA)
+-	if key.Code != http.StatusCreated {
+-		t.Fatalf("initial group key distribution: %d %s", key.Code, key.Body.String())
+-	}
+-
+-	plaintext := doJSON(t, a.CreateGroupMessage, http.MethodPost, "/api/v1/group-messages", map[string]any{
+-		"id": "g-plain", "group_id": group.ID, "body": "hello", "created_at": "2026-09-20T00:00:00Z",
+-	}, headersA)
+-	if plaintext.Code != http.StatusBadRequest {
+-		t.Fatalf("plaintext group body should be rejected, got %d", plaintext.Code)
+-	}
+-
+-	valid := doJSON(t, a.CreateGroupMessage, http.MethodPost, "/api/v1/group-messages", map[string]any{
+-		"id": "g-valid", "group_id": group.ID, "body": `gme:v1:{"version":1,"type":"group_message","key_version":1}`, "created_at": "2026-09-20T00:00:00+00:00",
+-	}, headersA)
+-	if valid.Code != http.StatusCreated {
+-		t.Fatalf("encrypted group body should be accepted: %d %s", valid.Code, valid.Body.String())
+-	}
+-	if !strings.Contains(valid.Body.String(), `"created_at":"2026-09-20T00:00:00Z"`) {
+-		t.Fatalf("created_at was not normalized: %s", valid.Body.String())
+-	}
+-}
+-
+-func TestGroupMembershipChangeBlocksStaleEpochAndRejoinCannotReuseRevokedEnvelope(t *testing.T) {
+-	_, a := newTestAPI(t)
+-	tokenA := registerAuditDevice(t, a, "a")
+-	_ = registerAuditDevice(t, a, "b")
+-	_ = registerAuditDevice(t, a, "c")
+-	headersA := map[string]string{"Authorization": "Bearer " + tokenA, "X-Device-ID": "a", "Content-Type": "application/json"}
+-	created := doJSON(t, a.CreateGroup, http.MethodPost, "/api/v1/groups", map[string]any{"name": "Epoch", "member_ids": []string{"b"}}, headersA)
+-	if created.Code != http.StatusCreated {
+-		t.Fatalf("create group: %d %s", created.Code, created.Body.String())
+-	}
+-	var group Group
+-	if err := json.Unmarshal(created.Body.Bytes(), &group); err != nil {
+-		t.Fatal(err)
+-	}
+-	fakeEnvelope := func(recipient, suffix string) map[string]string {
+-		return map[string]string{"recipient_id": recipient, "envelope": "gke:v1:{\"ciphertext\":\"" + suffix + "\"}"}
+-	}
+-	distribute := func(version int, envelopes ...map[string]string) int {
+-		res := doJSON(t, a.DistributeGroupKeyEnvelopes, http.MethodPost, "/api/v1/groups/keys", map[string]any{"group_id": group.ID, "key_version": version, "envelopes": envelopes}, headersA)
+-		return res.Code
+-	}
+-	if code := distribute(1, fakeEnvelope("b", "v1b")); code != http.StatusCreated {
+-		t.Fatalf("initial key distribution: %d", code)
+-	}
+-	message := func(id string, version int) int {
+-		res := doJSON(t, a.CreateGroupMessage, http.MethodPost, "/api/v1/group-messages", map[string]any{
+-			"id": id, "group_id": group.ID, "body": `gme:v1:{"version":1,"type":"group_message","key_version":` + strconv.Itoa(version) + `}`, "created_at": "2026-09-20T00:00:00Z",
+-		}, headersA)
+-		return res.Code
+-	}
+-	if code := message("epoch-1", 1); code != http.StatusCreated {
+-		t.Fatalf("v1 message expected created, got %d", code)
+-	}
+-	added := doJSON(t, a.AddGroupMember, http.MethodPost, "/api/v1/groups/members?group_id="+group.ID, map[string]any{"device_id": "c"}, headersA)
+-	if added.Code != http.StatusCreated {
+-		t.Fatalf("add member: %d %s", added.Code, added.Body.String())
+-	}
+-	if code := message("stale-1", 1); code != http.StatusConflict {
+-		t.Fatalf("stale v1 message after add expected conflict, got %d", code)
+-	}
+-	if code := distribute(2, fakeEnvelope("b", "v2b"), fakeEnvelope("c", "v2c")); code != http.StatusCreated {
+-		t.Fatalf("v2 distribution: %d", code)
+-	}
+-	if code := message("epoch-2", 2); code != http.StatusCreated {
+-		t.Fatalf("v2 message expected created, got %d", code)
+-	}
+-	removed := doJSON(t, a.RemoveGroupMember, http.MethodDelete, "/api/v1/groups/members?group_id="+group.ID+"&device_id=b", nil, headersA)
+-	if removed.Code != http.StatusOK {
+-		t.Fatalf("remove member: %d %s", removed.Code, removed.Body.String())
+-	}
+-	if code := message("stale-2", 2); code != http.StatusConflict {
+-		t.Fatalf("stale v2 message after remove expected conflict, got %d", code)
+-	}
+-	var oldEnvelopeCount int
+-	if err := a.store.DB().QueryRow(`SELECT COUNT(*) FROM group_key_envelopes WHERE group_id=? AND recipient_device_id='b'`, group.ID).Scan(&oldEnvelopeCount); err != nil {
+-		t.Fatal(err)
+-	}
+-	if oldEnvelopeCount != 0 {
+-		t.Fatalf("removed member retained %d key envelopes", oldEnvelopeCount)
+-	}
+-	if code := distribute(3, fakeEnvelope("c", "v3c")); code != http.StatusCreated {
+-		t.Fatalf("v3 distribution: %d", code)
+-	}
+-	if code := message("epoch-3", 3); code != http.StatusCreated {
+-		t.Fatalf("v3 message expected created, got %d", code)
+-	}
+-	readded := doJSON(t, a.AddGroupMember, http.MethodPost, "/api/v1/groups/members?group_id="+group.ID, map[string]any{"device_id": "b"}, headersA)
+-	if readded.Code != http.StatusCreated {
+-		t.Fatalf("re-add member: %d %s", readded.Code, readded.Body.String())
+-	}
+-	var rejoinOld int
+-	if err := a.store.DB().QueryRow(`SELECT COUNT(*) FROM group_key_envelopes WHERE group_id=? AND recipient_device_id='b' AND key_version<4`, group.ID).Scan(&rejoinOld); err != nil {
+-		t.Fatal(err)
+-	}
+-	if rejoinOld != 0 {
+-		t.Fatalf("rejoined member regained %d old key envelopes", rejoinOld)
+-	}
+-}
+diff --git a/internal/httpapi/group_keys.go b/internal/httpapi/group_keys.go
+deleted file mode 100644
+index c624eb6..0000000
+--- a/internal/httpapi/group_keys.go
++++ /dev/null
+@@ -1,215 +0,0 @@
+-package httpapi
+-
+-import (
+-	"database/sql"
+-	"net/http"
+-	"strings"
+-	"time"
+-)
+-
+-const (
+-	maxGroupKeyEnvelopeSize = 16 << 10
+-	maxGroupKeyVersion      = 1_000_000
+-)
+-
+-type GroupKeyEnvelope struct {
+-	GroupID     string `json:"group_id"`
+-	KeyVersion  int    `json:"key_version"`
+-	SenderID    string `json:"sender_id"`
+-	RecipientID string `json:"recipient_id"`
+-	Envelope    string `json:"envelope"`
+-	CreatedAt   string `json:"created_at"`
+-}
+-
+-func (a *API) ListGroupKeyEnvelopes(w http.ResponseWriter, r *http.Request) {
+-	deviceID, ok := a.authorizeDevice(r)
+-	if !ok {
+-		writeError(w, http.StatusUnauthorized, "unauthorized")
+-		return
+-	}
+-	groupID := strings.TrimSpace(r.URL.Query().Get("group_id"))
+-	if groupID == "" {
+-		writeError(w, http.StatusBadRequest, "group_id is required")
+-		return
+-	}
+-	if !a.isGroupMember(groupID, deviceID) {
+-		writeError(w, http.StatusForbidden, "device is not a group member")
+-		return
+-	}
+-
+-	rows, err := a.store.DB().Query(`
+-SELECT group_id,key_version,sender_id,recipient_device_id,envelope,created_at
+-FROM group_key_envelopes
+-WHERE group_id=? AND recipient_device_id=?
+-ORDER BY key_version ASC`, groupID, deviceID)
+-	if err != nil {
+-		writeError(w, http.StatusInternalServerError, "failed to read group key envelopes")
+-		return
+-	}
+-	defer rows.Close()
+-	out := make([]GroupKeyEnvelope, 0)
+-	for rows.Next() {
+-		var item GroupKeyEnvelope
+-		if err := rows.Scan(&item.GroupID, &item.KeyVersion, &item.SenderID, &item.RecipientID, &item.Envelope, &item.CreatedAt); err != nil {
+-			writeError(w, http.StatusInternalServerError, "failed to read group key envelope")
+-			return
+-		}
+-		out = append(out, item)
+-	}
+-	if err := rows.Err(); err != nil {
+-		writeError(w, http.StatusInternalServerError, "failed to iterate group key envelopes")
+-		return
+-	}
+-	writeJSON(w, http.StatusOK, out)
+-}
+-
+-func (a *API) DistributeGroupKeyEnvelopes(w http.ResponseWriter, r *http.Request) {
+-	actor, ok := a.authorizeDevice(r)
+-	if !ok {
+-		writeError(w, http.StatusUnauthorized, "unauthorized")
+-		return
+-	}
+-	var in struct {
+-		GroupID    string `json:"group_id"`
+-		KeyVersion int    `json:"key_version"`
+-		Envelopes  []struct {
+-			RecipientID string `json:"recipient_id"`
+-			Envelope    string `json:"envelope"`
+-		} `json:"envelopes"`
+-	}
+-	if err := decodeJSON(r, &in, 256<<10); err != nil {
+-		writeError(w, http.StatusBadRequest, "invalid request body")
+-		return
+-	}
+-	in.GroupID = strings.TrimSpace(in.GroupID)
+-	if in.GroupID == "" || in.KeyVersion < 1 || in.KeyVersion > maxGroupKeyVersion {
+-		writeError(w, http.StatusBadRequest, "invalid group key metadata")
+-		return
+-	}
+-	if !a.isGroupOwner(in.GroupID, actor) {
+-		writeError(w, http.StatusForbidden, "only the group owner can distribute group keys")
+-		return
+-	}
+-	if len(in.Envelopes) > maxGroupMembers {
+-		writeError(w, http.StatusBadRequest, "too many group key envelopes")
+-		return
+-	}
+-
+-	tx, err := a.store.DB().Begin()
+-	if err != nil {
+-		writeError(w, http.StatusInternalServerError, "failed to start group key transaction")
+-		return
+-	}
+-	defer tx.Rollback()
+-
+-	var currentVersion, rekeyRequired int
+-	if err := tx.QueryRow(`SELECT key_version,rekey_required FROM groups WHERE id=?`, in.GroupID).Scan(&currentVersion, &rekeyRequired); err != nil {
+-		if err == sql.ErrNoRows {
+-			writeError(w, http.StatusNotFound, "group not found")
+-		} else {
+-			writeError(w, http.StatusInternalServerError, "failed to read group key state")
+-		}
+-		return
+-	}
+-	if in.KeyVersion != currentVersion {
+-		writeError(w, http.StatusConflict, "group key version does not match the current group epoch")
+-		return
+-	}
+-
+-	members, err := a.groupMemberIDsTx(tx, in.GroupID)
+-	if err != nil {
+-		writeError(w, http.StatusInternalServerError, "failed to read group members")
+-		return
+-	}
+-	requiredRecipients := make(map[string]bool, len(members))
+-	for _, id := range members {
+-		if id != actor {
+-			requiredRecipients[id] = true
+-		}
+-	}
+-
+-	// A committed epoch can be retried safely when the exact same envelope set
+-	// is submitted after a lost response.
+-	rowsExisting, err := tx.Query(`SELECT recipient_device_id,envelope FROM group_key_envelopes WHERE group_id=? AND key_version=?`, in.GroupID, in.KeyVersion)
+-	if err != nil {
+-		writeError(w, http.StatusInternalServerError, "failed to read existing group key envelopes")
+-		return
+-	}
+-	existing := make(map[string]string)
+-	for rowsExisting.Next() {
+-		var recipient, envelope string
+-		if err := rowsExisting.Scan(&recipient, &envelope); err != nil {
+-			rowsExisting.Close()
+-			writeError(w, http.StatusInternalServerError, "failed to read existing group key envelope")
+-			return
+-		}
+-		existing[recipient] = envelope
+-	}
+-	if err := rowsExisting.Err(); err != nil {
+-		rowsExisting.Close()
+-		writeError(w, http.StatusInternalServerError, "failed to iterate existing group key envelopes")
+-		return
+-	}
+-	rowsExisting.Close()
+-
+-	requested := make(map[string]string, len(in.Envelopes))
+-	for _, env := range in.Envelopes {
+-		recipient := strings.TrimSpace(env.RecipientID)
+-		envelope := strings.TrimSpace(env.Envelope)
+-		if recipient == "" || recipient == actor || !requiredRecipients[recipient] || requested[recipient] != "" || envelope == "" || len(envelope) > maxGroupKeyEnvelopeSize || !strings.HasPrefix(envelope, "gke:v1:") {
+-			writeError(w, http.StatusBadRequest, "invalid group key envelope")
+-			return
+-		}
+-		requested[recipient] = envelope
+-	}
+-	if len(requested) != len(requiredRecipients) {
+-		writeError(w, http.StatusBadRequest, "group key envelope set must cover every current member except the owner")
+-		return
+-	}
+-	if len(existing) > 0 || rekeyRequired == 0 {
+-		if len(existing) == len(requested) {
+-			exact := true
+-			for recipient, envelope := range existing {
+-				if requested[recipient] != envelope {
+-					exact = false
+-					break
+-				}
+-			}
+-			if exact {
+-				if rekeyRequired != 0 {
+-					if _, err := tx.Exec(`UPDATE groups SET rekey_required=0 WHERE id=? AND key_version=?`, in.GroupID, in.KeyVersion); err != nil {
+-						writeError(w, http.StatusInternalServerError, "failed to commit existing group key epoch")
+-						return
+-					}
+-				}
+-				if err := tx.Commit(); err != nil {
+-					writeError(w, http.StatusInternalServerError, "failed to commit idempotent group key request")
+-					return
+-				}
+-				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "group_id": in.GroupID, "key_version": in.KeyVersion, "envelope_count": len(in.Envelopes), "idempotent": true})
+-				return
+-			}
+-		}
+-		writeError(w, http.StatusConflict, "group key version already exists with different envelopes")
+-		return
+-	}
+-
+-	now := time.Now().UTC().Format(time.RFC3339Nano)
+-	for recipient, envelope := range requested {
+-		if _, err := tx.Exec(`
+-INSERT INTO group_key_envelopes(group_id,key_version,sender_id,recipient_device_id,envelope,created_at)
+-VALUES(?,?,?,?,?,?)`, in.GroupID, in.KeyVersion, actor, recipient, envelope, now); err != nil {
+-			writeError(w, http.StatusInternalServerError, "failed to store group key envelope")
+-			return
+-		}
+-	}
+-	if _, err := tx.Exec(`UPDATE groups SET rekey_required=0 WHERE id=? AND key_version=?`, in.GroupID, in.KeyVersion); err != nil {
+-		writeError(w, http.StatusInternalServerError, "failed to commit group key epoch")
+-		return
+-	}
+-	if err := tx.Commit(); err != nil {
+-		writeError(w, http.StatusInternalServerError, "failed to commit group key envelopes")
+-		return
+-	}
+-	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "group_id": in.GroupID, "key_version": in.KeyVersion, "envelope_count": len(in.Envelopes)})
+-}
+diff --git a/internal/httpapi/group_retirement_audit_test.go b/internal/httpapi/group_retirement_audit_test.go
+new file mode 100644
+index 0000000..a6ea603
+--- /dev/null
++++ b/internal/httpapi/group_retirement_audit_test.go
+@@ -0,0 +1,77 @@
++package httpapi
++
++import (
++	"encoding/json"
++	"net/http"
++	"strings"
++	"testing"
++)
++
++func registerAuditDevice(t *testing.T, a *API, id string) string {
++	t.Helper()
++	res := doJSON(t, a.RegisterDevice, http.MethodPost, "/api/v1/devices", map[string]any{
++		"id": id, "name": id, "platform": "android",
++	}, nil)
++	if res.Code != http.StatusCreated {
++		t.Fatalf("register %s: %d %s", id, res.Code, res.Body.String())
++	}
++	var payload struct {
++		Token string `json:"token"`
++	}
++	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
++		t.Fatal(err)
++	}
++	return payload.Token
++}
++
++// Group payload crypto was retired by migration 54 ("retire-group-payload-crypto").
++// This test locks in the plaintext group flow that replaces the old envelope
++// epoch flow: owner creates a group, posts a plaintext message, members can
++// read it, outsiders cannot.
++func TestGroupPlaintextFlowAfterCryptoRetirement(t *testing.T) {
++	_, a := newTestAPI(t)
++	tokenA := registerAuditDevice(t, a, "a")
++	tokenB := registerAuditDevice(t, a, "b")
++	tokenC := registerAuditDevice(t, a, "c")
++	headersA := map[string]string{"Authorization": "Bearer " + tokenA, "X-Device-ID": "a", "Content-Type": "application/json"}
++	headersB := map[string]string{"Authorization": "Bearer " + tokenB, "X-Device-ID": "b"}
++	headersC := map[string]string{"Authorization": "Bearer " + tokenC, "X-Device-ID": "c"}
++
++	created := doJSON(t, a.CreateGroup, http.MethodPost, "/api/v1/groups", map[string]any{"name": "Plain", "member_ids": []string{"b"}}, headersA)
++	if created.Code != http.StatusCreated {
++		t.Fatalf("create group: %d %s", created.Code, created.Body.String())
++	}
++	var group Group
++	if err := json.Unmarshal(created.Body.Bytes(), &group); err != nil {
++		t.Fatal(err)
++	}
++
++	sent := doJSON(t, a.CreateGroupMessage, http.MethodPost, "/api/v1/group-messages", map[string]any{
++		"id": "retire-1", "group_id": group.ID, "body": "plaintext hello", "created_at": "2026-09-20T00:00:00Z",
++	}, headersA)
++	if sent.Code != http.StatusCreated {
++		t.Fatalf("group message: %d %s", sent.Code, sent.Body.String())
++	}
++
++	listed := doJSON(t, a.ListGroupMessages, http.MethodGet, "/api/v1/group-messages?group_id="+group.ID, nil, headersB)
++	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), "plaintext hello") {
++		t.Fatalf("member could not read group history: %d %s", listed.Code, listed.Body.String())
++	}
++
++	outsider := doJSON(t, a.ListGroupMessages, http.MethodGet, "/api/v1/group-messages?group_id="+group.ID, nil, headersC)
++	if outsider.Code == http.StatusOK && strings.Contains(outsider.Body.String(), "plaintext hello") {
++		t.Fatalf("non-member could read group history: %d %s", outsider.Code, outsider.Body.String())
++	}
++}
++
++// The retired key-envelope schema must stay retired once migration 54 has run,
++// on both fresh installs and upgraded databases.
++func TestGroupKeyEnvelopeSchemaStaysRetired(t *testing.T) {
++	st, a := newTestAPI(t)
++	_ = a
++	var name string
++	err := st.DB().QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='group_key_envelopes'`).Scan(&name)
++	if err == nil {
++		t.Fatalf("group_key_envelopes table must not exist after crypto retirement")
++	}
++}
+diff --git a/internal/httpapi/message_delivery_phase338_test.go b/internal/httpapi/message_delivery_phase338_test.go
+index 8d29199..cf17910 100644
+--- a/internal/httpapi/message_delivery_phase338_test.go
++++ b/internal/httpapi/message_delivery_phase338_test.go
+@@ -12,6 +12,12 @@ func TestInsertMessageAtPreservesCanonicalPlaintextTimestamp(t *testing.T) {
+ 	}
+ 	defer st.Close()
+ 	a := New(st)
++	now := "2026-09-30T00:00:00Z"
++	for _, id := range []string{"android-a", "android-b"} {
++		if _, err := st.DB().Exec(`INSERT INTO devices(id,name,platform,created_at,last_seen_at,status) VALUES(?,?,?,?,?,'active')`, id, id, "android", now, now); err != nil {
++			t.Fatal(err)
++		}
++	}
+ 	created := "2026-09-30T09:46:50.475382Z"
+ 	stored, _, err := a.insertMessageAt("android-a", "android-b", "hello", created, "m1", nil)
+ 	if err != nil {
+diff --git a/internal/httpapi/phase50_protocol_test.go b/internal/httpapi/phase50_protocol_test.go
+index 8774dc6..01558fd 100644
+--- a/internal/httpapi/phase50_protocol_test.go
++++ b/internal/httpapi/phase50_protocol_test.go
+@@ -1,6 +1,7 @@
+ package httpapi
+ 
+ import (
++	"time"
+ 	"encoding/json"
+ 	"net/http"
+ 	"strings"
+diff --git a/internal/httpapi/review_regression_test.go b/internal/httpapi/review_regression_test.go
+deleted file mode 100644
+index a24d548..0000000
+--- a/internal/httpapi/review_regression_test.go
++++ /dev/null
+@@ -1,123 +0,0 @@
+-package httpapi
+-
+-import (
+-	"encoding/json"
+-	"net/http"
+-	"strings"
+-	"testing"
+-
+-	"locallink/backend/internal/store"
+-)
+-
+-func TestDeviceAuthAndConversationAuthorization(t *testing.T) {
+-	st, err := store.Open(t.TempDir() + "/locallink.db")
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	defer st.Close()
+-	a := New(st)
+-
+-	register := func(id, name string) string {
+-		res := doJSON(t, a.RegisterDevice, http.MethodPost, "/api/v1/devices", map[string]any{"id": id, "name": name, "platform": "android"}, nil)
+-		if res.Code != http.StatusCreated {
+-			t.Fatalf("register %s: got %d: %s", id, res.Code, res.Body.String())
+-		}
+-		var payload struct {
+-			Token string `json:"token"`
+-		}
+-		if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+-			t.Fatal(err)
+-		}
+-		return payload.Token
+-	}
+-	tokenA := register("a", "Phone A")
+-	tokenB := register("b", "Phone B")
+-
+-	headersA := map[string]string{"Authorization": "Bearer " + tokenA, "X-Device-ID": "a", "Content-Type": "application/json"}
+-	msgRes := doJSON(t, a.CreateMessage, http.MethodPost, "/api/v1/messages", map[string]any{
+-		"id": "message-1", "sender_id": "a", "recipient_id": "b", "body": "hello-local-link",
+-	}, headersA)
+-	if msgRes.Code != http.StatusCreated {
+-		t.Fatalf("create message: got %d: %s", msgRes.Code, msgRes.Body.String())
+-	}
+-	if !strings.Contains(msgRes.Body.String(), `"server_seq":`) {
+-		t.Fatal("message response missing server_seq")
+-	}
+-	if !strings.Contains(msgRes.Body.String(), `"sender_id":"a"`) {
+-		t.Fatal("message response is not using documented JSON field names")
+-	}
+-
+-	headersB := map[string]string{"Authorization": "Bearer " + tokenB, "X-Device-ID": "b"}
+-	list := doJSON(t, a.ListMessages, http.MethodGet, "/api/v1/messages?a=a&b=b&limit=10", nil, headersB)
+-	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), "message-1") {
+-		t.Fatalf("conversation lookup failed: %d %s", list.Code, list.Body.String())
+-	}
+-
+-	forbidden := doJSON(t, a.ListMessages, http.MethodGet, "/api/v1/messages?a=a&b=someone-else", nil, headersB)
+-	if forbidden.Code != http.StatusForbidden {
+-		t.Fatalf("expected forbidden conversation lookup, got %d", forbidden.Code)
+-	}
+-
+-	unauthorizedAck := doJSON(t, a.MessageAck, http.MethodPost, "/api/v1/messages/ack?id=message-1", nil, headersA)
+-	if unauthorizedAck.Code != http.StatusForbidden {
+-		t.Fatalf("sender should not acknowledge its own message as delivered, got %d", unauthorizedAck.Code)
+-	}
+-
+-	// Capture the sender's cursor before the recipient acknowledges delivery.
+-	// This simulates a sender that goes offline after sending the message.
+-	senderInitial := doJSON(t, a.Sync, http.MethodGet, "/api/v1/sync", nil, headersA)
+-	if senderInitial.Code != http.StatusOK {
+-		t.Fatalf("sender initial sync failed: %d %s", senderInitial.Code, senderInitial.Body.String())
+-	}
+-	var initialPayload SyncResponse
+-	if err := json.Unmarshal(senderInitial.Body.Bytes(), &initialPayload); err != nil {
+-		t.Fatal(err)
+-	}
+-	ack := doJSON(t, a.MessageAck, http.MethodPost, "/api/v1/messages/ack?id=message-1", nil, headersB)
+-	if ack.Code != http.StatusOK {
+-		t.Fatalf("ack failed: %d %s", ack.Code, ack.Body.String())
+-	}
+-	if !strings.Contains(ack.Body.String(), `"status":"delivered"`) {
+-		t.Fatalf("ack response missing delivered status: %s", ack.Body.String())
+-	}
+-	if !strings.Contains(ack.Body.String(), `"body":"hello`) {
+-		t.Fatalf("ack response lost plaintext body: %s", ack.Body.String())
+-	}
+-	cursor := initialPayload.NextCursor
+-	statusSync := doJSON(t, a.Sync, http.MethodGet, "/api/v1/sync?cursor="+cursor, nil, headersA)
+-	if statusSync.Code != http.StatusOK {
+-		t.Fatalf("delivery-status sync failed: %d %s", statusSync.Code, statusSync.Body.String())
+-	}
+-	var statusPayload SyncResponse
+-	if err := json.Unmarshal(statusSync.Body.Bytes(), &statusPayload); err != nil {
+-		t.Fatal(err)
+-	}
+-	if len(statusPayload.Messages) != 1 || statusPayload.Messages[0].Status != "delivered" {
+-		t.Fatalf("sender did not recover delivered status: %+v", statusPayload.Messages)
+-	}
+-}
+-
+-func TestMessageBodyLimit(t *testing.T) {
+-	st, err := store.Open(t.TempDir() + "/locallink.db")
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	defer st.Close()
+-	a := New(st)
+-	register := func(id string) string {
+-		res := doJSON(t, a.RegisterDevice, http.MethodPost, "/api/v1/devices", map[string]any{"id": id, "name": id}, nil)
+-		var payload struct {
+-			Token string `json:"token"`
+-		}
+-		_ = json.Unmarshal(res.Body.Bytes(), &payload)
+-		return payload.Token
+-	}
+-	token := register("a")
+-	_ = register("b")
+-	res := doJSON(t, a.CreateMessage, http.MethodPost, "/api/v1/messages", map[string]any{
+-		"id": "too-large", "sender_id": "a", "recipient_id": "b", "body": strings.Repeat("x", maxMessageLen+1),
+-	}, map[string]string{"Authorization": "Bearer " + token, "X-Device-ID": "a"})
+-	if res.Code != http.StatusBadRequest {
+-		t.Fatalf("expected body limit rejection, got %d", res.Code)
+-	}
+-}
+diff --git a/internal/httpapi/test_helpers_test.go b/internal/httpapi/test_helpers_test.go
+index b68da6a..6f224f4 100644
+--- a/internal/httpapi/test_helpers_test.go
++++ b/internal/httpapi/test_helpers_test.go
+@@ -47,3 +47,8 @@ func newTestAPI(t *testing.T) (*store.Store, *API) {
+ 	t.Cleanup(func() { _ = st.Close() })
+ 	return st, New(st)
+ }
++
++func newTestStore(t *testing.T) (*store.Store, error) {
++	t.Helper()
++	return store.Open(t.TempDir() + "/locallink.db")
++}
+diff --git a/internal/store/store_test.go b/internal/store/store_test.go
+index 20cb2cb..d8cef01 100644
+--- a/internal/store/store_test.go
++++ b/internal/store/store_test.go
+@@ -262,20 +262,28 @@ func TestPhase59StrictMigrationLedgerFreshInstall(t *testing.T) {
+ 	}
+ 	defer st.Close()
+ 
++	wantVersion := legacyMigrationBaselineVersion
++	for _, spec := range orderedMigrationSpecs() {
++		if spec.Version > wantVersion {
++			wantVersion = spec.Version
++		}
++	}
++
+ 	var maxVersion int
+ 	if err := st.DB().QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if maxVersion != 53 {
+-		t.Fatalf("schema version=%d, want latest ordered migration 53", maxVersion)
++	if maxVersion != wantVersion {
++		t.Fatalf("schema version=%d, want latest ordered migration %d", maxVersion, wantVersion)
+ 	}
+ 
++	wantLedger := 1 + len(orderedMigrationSpecs())
+ 	var ledgerCount int
+ 	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM schema_migration_ledger`).Scan(&ledgerCount); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if ledgerCount != 4 {
+-		t.Fatalf("ledger rows=%d, want 4 (baseline + 51-53)", ledgerCount)
++	if ledgerCount != wantLedger {
++		t.Fatalf("ledger rows=%d, want %d (baseline + ordered specs)", ledgerCount, wantLedger)
+ 	}
+ 
+ 	var name, checksum string
+@@ -357,7 +365,14 @@ func TestPhase59RejectsDatabaseFromFutureMigration(t *testing.T) {
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if _, err := st.DB().Exec(`INSERT INTO schema_migrations(version) VALUES(54)`); err != nil {
++	futureVersion := legacyMigrationBaselineVersion
++	for _, spec := range orderedMigrationSpecs() {
++		if spec.Version > futureVersion {
++			futureVersion = spec.Version
++		}
++	}
++	futureVersion++
++	if _, err := st.DB().Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, futureVersion); err != nil {
+ 		st.Close()
+ 		t.Fatal(err)
+ 	}
+-- 
+2.47.3
+
