@@ -407,6 +407,9 @@ window.LL = window.LL || {};
     redrawAll: () => registry.forEach((entry) => {
       if (document.body.contains(entry.canvas)) entry.draw(entry.canvas);
     }),
+    // The poll refresh replaces only changed regions; canvases that left the
+    // DOM are dropped here instead of accumulating forever.
+    prune: () => { for (let i = registry.length - 1; i >= 0; i--) if (!document.body.contains(registry[i].canvas)) registry.splice(i, 1); },
     reset: () => { registry.length = 0; },
     hexToRgba,
   };

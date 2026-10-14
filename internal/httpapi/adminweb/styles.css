@@ -363,7 +363,14 @@ select.input { height: 34px; }
   font-size: 10.5px; font-weight: 700;
   display: inline-flex; align-items: center; justify-content: center;
 }
-.app.collapsed .nav-label, .app.collapsed .nav-badge, .app.collapsed .nav-item .nav-meta { display: none; }
+.nav-count {
+  min-width: 20px; height: 18px; padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted); color: var(--text-secondary);
+  font-size: 10.5px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.app.collapsed .nav-label, .app.collapsed .nav-badge, .app.collapsed .nav-count, .app.collapsed .nav-item .nav-meta { display: none; }
 .app.collapsed .nav-item { justify-content: center; padding: 0; }
 .sidebar-foot { border-top: 1px solid var(--border); padding: var(--space-sm); }
 
@@ -823,7 +830,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   }
   .app.drawer-open .sidebar { transform: none; }
   .app.collapsed .sidebar { width: var(--sidebar-width); flex-basis: var(--sidebar-width); }
-  .app.collapsed .nav-label, .app.collapsed .nav-badge,
+  .app.collapsed .nav-label, .app.collapsed .nav-badge, .app.collapsed .nav-count,
   .app.collapsed .nav-group-title, .app.collapsed .brand-text { display: revert; }
   .app.collapsed .nav-item { justify-content: flex-start; padding: 0 var(--space-md); }
   .app.collapsed .sidebar-head { justify-content: flex-start; }
@@ -840,6 +847,37 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .panel { padding: var(--space-md); }
   .modal { padding: var(--space-lg); }
 }
+
+/* ---------------------------------------------------- conversations module
+   A message list, not an event timeline: conversations can be long, so bodies
+   wrap, line breaks in the original text are preserved, and the sender and
+   time stay on their own line above each message. */
+.msg-thread { display: flex; flex-direction: column; gap: var(--space-sm); }
+.msg-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: var(--space-md);
+}
+.msg-head {
+  display: flex; align-items: baseline; gap: var(--space-sm);
+  flex-wrap: wrap; margin-bottom: 6px;
+}
+.msg-head strong { font-size: 13.5px; color: var(--text-primary); }
+.msg-user { font-size: 11.5px; color: var(--text-tertiary); font-family: var(--font-mono); }
+.msg-time { margin-left: auto; font-size: 11.5px; color: var(--text-tertiary); }
+.msg-body {
+  font-size: 13.5px; line-height: 1.55; color: var(--text-primary);
+  white-space: pre-wrap; word-break: break-word;
+}
+.msg-meta {
+  display: flex; align-items: center; gap: var(--space-sm);
+  margin-top: 8px; font-size: 11.5px;
+}
+@media (max-width: 720px) {
+  .msg-time { margin-left: 0; }
+}
+
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }

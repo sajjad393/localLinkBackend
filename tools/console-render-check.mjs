@@ -141,14 +141,93 @@ async function main() {
     else if (problems.length === before) notes.push(`module "${id}" mounted`);
   }
 
-  // Permission gating.
+  // Message review: the listing is metadata only, opening a thread shows the text,
+  // and the sidebar carries real counts from the server summary.
   {
+    await window.LL.app.mountView('conversations');
+    await tick();
+    await tick();
+    const listing = textOf(window);
+    if (!listing.includes('Conversations')) problems.push('the conversations module did not render its heading');
+    if (!listing.includes('Reading is recorded')) problems.push('the conversations module does not tell the operator that reading is logged');
+    const summary = await (await realFetch('/api/v1/admin/summary')).json();
+    let counted = 0;
+    for (const [view, key] of [['users', 'users'], ['devices', 'devices'], ['sessions', 'active_sessions']]) {
+      if (typeof summary[key] !== 'number') continue;
+      const badge = window.document.querySelector(`.nav-item[data-nav="${view}"] .nav-count`);
+      if (!badge) problems.push(`the sidebar shows no count for ${view} although the server reports one`);
+      else if (badge.textContent.trim() !== String(summary[key])) problems.push(`the sidebar count for ${view} says "${badge.textContent.trim()}", the server says ${summary[key]}`);
+      else counted += 1;
+    }
+    if (counted) notes.push(`sidebar counts match the server summary (${counted} checked)`);
+    const openButton = window.document.querySelector('[data-conversation-open]');
+    if (!openButton) {
+      notes.push('no conversations exist on this server, so the listing showed its empty state');
+    } else {
+      // Ask the server for the same thread the button points at, so the check
+      // knows a real body that must stay out of the listing and must appear
+      // once the conversation is open.
+      const kind = openButton.getAttribute('data-kind') || 'direct';
+      const threadPath = kind === 'group'
+        ? `/api/v1/admin/group-conversation?group_id=${encodeURIComponent(openButton.getAttribute('data-group') || '')}&limit=1`
+        : `/api/v1/admin/conversation?user_a=${encodeURIComponent(openButton.getAttribute('data-a') || '')}&user_b=${encodeURIComponent(openButton.getAttribute('data-b') || '')}&limit=1`;
+      let sample = '';
+      try {
+        const payload = await (await realFetch(threadPath)).json();
+        sample = ((payload.messages || [])[0] || {}).body || '';
+      } catch (err) { sample = ''; }
+      if (sample && listing.includes(sample)) problems.push('the conversation listing showed message text before anything was opened');
+      openButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+      await tick();
+      await tick();
+      const thread = textOf(window);
+      if (sample && !thread.includes(sample)) problems.push('the opened conversation did not show the message text the server returned');
+      else if (sample) notes.push('the opened conversation shows the real message text');
+      if (thread === listing) problems.push('opening a conversation changed nothing on screen');
+      else if (!thread.includes('Access recorded')) problems.push('an opened conversation does not state that the read is recorded');
+      else notes.push('a conversation opens and marks the read as recorded');
+      const back = window.document.querySelector('[data-conversation-back]');
+      if (!back) problems.push('an opened conversation offers no way back to the listing');
+      else {
+        back.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+        await tick();
+        await tick();
+        if (!window.document.querySelector('[data-conversation-open]')) problems.push('the back button did not return to the listing');
+        else notes.push('the back button returns to the listing');
+      }
+    }
+  }
+  // Permission gating.
+
+    {
     const previous = window.LL.app.state.session;
     window.LL.app.state.session = { username: 'auditor', role: 'auditor', expires_at: null };
     await window.LL.app.mountView('settings');
     await tick();
+  // The privacy page must state the real boundary, never the old promise.
+  {
+    await window.LL.app.mountView('privacy');
+    await tick();
+    await tick();
+    const policy = textOf(window);
+    if (policy.includes('never exposed to this console')) problems.push('the privacy page still claims message bodies are unreachable');
+    else if (!policy.includes('Message review is switched on')) problems.push('the privacy page does not state that an owner can read message bodies');
+    else notes.push('the privacy page states the real access boundary');
+    // Restore the view the role-gate check below expects to be on screen.
+    await window.LL.app.mountView('settings');
+    await tick();
+  }
+
     if (!textOf(window).includes('higher role')) problems.push('an owner-only module did not explain the role requirement');
     else notes.push('role gate explains why a module is unavailable');
+
+    await window.LL.app.mountView('conversations');
+    await tick();
+    await tick();
+    const gated = textOf(window);
+    if (gated.includes('Reading is recorded') || window.document.querySelector('[data-conversation-open]')) {
+      problems.push('the conversations module rendered its contents for a non-owner role');
+    } else notes.push('message review is closed to non-owner roles in the console');
     window.LL.app.state.session = previous;
   }
 

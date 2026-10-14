@@ -258,6 +258,7 @@ func (a *API) authorizeAdminSession(r *http.Request) (AdminAccount, bool) {
 func adminPermission(role, permission string) bool {
 	switch role {
 	case "owner":
+		// The owner holds every permission, including read_conversations.
 		return true
 	case "operator":
 		return permission == "read" || permission == "manage_devices" || permission == "manage_recovery" || permission == "manage_network_policy"

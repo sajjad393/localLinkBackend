@@ -99,6 +99,12 @@ LL.views = {};
   }
 
   // ------------------------------------------------------------------ dashboard
+  // A poll refresh replaces only the regions whose content actually changed,
+  // so every live piece of the dashboard carries an explicit marker.
+  function pollRegion(id, html) {
+    return `<div data-poll-region="${id}">${html}</div>`;
+  }
+
   const dashboard = {
     id: 'dashboard',
     title: 'Dashboard',
@@ -140,7 +146,7 @@ LL.views = {};
       const parts = [];
 
       // ---- header
-      parts.push(`<div class="section-head">
+      parts.push(pollRegion('header', `<div class="section-head">
         <div class="grow">
           <h1 class="type-page-title">Overview</h1>
           <span class="sub">${analytics.ok && analytics.data.generated_at
@@ -151,7 +157,7 @@ LL.views = {};
           ${ui.badge('Range: ' + ui.esc(range), 'primary')}
           ${ui.statusBadge(overall, { label: 'Overall: ' + ui.statusInfo(overall).label })}
         </div>
-      </div>`);
+      </div>`))
 
       // ---- metric area
       const metricCards = [];
@@ -195,7 +201,7 @@ LL.views = {};
           <p>${ui.esc(summary.error || 'The summary endpoint did not respond.')}</p>
           <button class="btn btn-sm" data-retry="dashboard">${ui.icon('i-refresh')}Retry</button></div>`);
       }
-      parts.push(`<div class="grid grid-metrics">${metricCards.join('')}</div>`);
+      parts.push(pollRegion('metrics', `<div class="grid grid-metrics">${metricCards.join('')}</div>`));
 
       // ---- analytics
       const messagePoints = seriesToList(series.messages, longRange);
@@ -216,13 +222,13 @@ LL.views = {};
           ? chartCanvas({ type: 'line', options: { points: bytePoints, color: ui.token('info', '#0b5fa5'), height: 200, xLabelCount: 6, longRange } }, 200)
           : ui.emptyState({ icon: 'i-activity', title: 'No response traffic', message: 'No bytes were served during the selected period.' }));
 
-      parts.push(`<section class="section">
+      parts.push(pollRegion('analytics', `<section class="section">
         ${ui.sectionHead({ title: 'Activity analytics', subtitle: 'Rollups computed from platform tables and the runtime sampler', icon: 'i-activity', actions: rangeSelector })}
         <div class="split-3-2">
           ${ui.panel({ title: 'Message activity', subtitle: 'Messages accepted by the server per bucket', body: messageChart })}
           ${ui.panel({ title: 'Server traffic', subtitle: runtimeAvailable ? 'Response bytes served per bucket' : 'Requires the runtime metrics sampler', body: byteChart })}
         </div>
-      </section>`);
+      </section>`))
 
       // ---- health
       const gaugeKeys = ['cpu', 'memory', 'storage'];
@@ -247,10 +253,10 @@ LL.views = {};
             </div>`
           : ui.emptyState({ icon: 'i-pulse', title: 'No health readings', message: 'The server did not return subsystem readings for this request.' }));
 
-      parts.push(`<section class="section">
+      parts.push(pollRegion('health', `<section class="section">
         ${ui.sectionHead({ title: 'Server health', subtitle: 'Percentages are live readings; the tick marks the alert threshold', icon: 'i-pulse', actions: ui.statusBadge(overall) })}
         ${ui.panel({ body: healthBody })}
-      </section>`);
+      </section>`))
 
       // ---- network + security
       let networkBody;
@@ -314,7 +320,7 @@ LL.views = {};
           </div>` : ''}`;
       }
 
-      parts.push(`<div class="section">
+      parts.push(pollRegion('netsec', `<div class="section">
         <div class="split-1-1">
           ${ui.panel({
             title: 'Live network', subtitle: 'Transport state reported by connected devices',
@@ -328,21 +334,21 @@ LL.views = {};
             body: securityBody,
           })}
         </div>
-      </div>`);
+      </div>`))
 
       // ---- activity
       const timelineEntries = activityEvents.map((e) => ({
         title: e.title, detail: e.detail, timestamp: e.created_at, severity: e.severity,
         icon: activityIcon(e.type),
       }));
-      parts.push(ui.panel({
+      parts.push(pollRegion('activity', ui.panel({
         title: 'Recent activity',
         subtitle: 'Newest first, merged across users, devices, files, calls and audit sources',
         actions: `<button class="btn btn-sm" data-nav="audit">Open audit log</button>`,
         body: !activity.ok
           ? ui.errorState(activity.error, 'dashboard')
           : ui.timeline(timelineEntries, { max: 10, emptyMessage: 'No operational events have been recorded on this server yet.' }),
-      }));
+      })));
 
       // ---- quick actions
       const actions = [
@@ -358,19 +364,52 @@ LL.views = {};
       if (ctx.can('backup')) actions.push({ id: 'backup', label: 'Create backup', icon: 'i-backup' });
       // Trim the list to what this role may actually open.
       const permitted = actions.filter((a) => !LL.moduleRoles[a.id] || LL.moduleRoles[a.id].indexOf(ctx.role) >= 0);
-      parts.push(`<section class="section">
+      parts.push(pollRegion('actions', `<section class="section">
         ${ui.sectionHead({ title: 'Quick actions', subtitle: 'Only actions your admin role permits', icon: 'i-flag' })}
         <div class="grid grid-actions">${permitted.map((a) => ui.quickAction({
           label: a.label, icon: a.icon, action: a.id === 'backup' ? 'backup' : 'nav:' + a.id,
         })).join('')}</div>
-      </section>`);
+      </section>`))
 
-      parts.push(ui.note('Privacy boundary',
-        'Operational metadata only. Passwords, private keys, message bodies, call audio and decrypted media are never exposed to this console.',
-        'i-lock'));
+      parts.push(pollRegion('note', ui.note('Message review is switched on',
+        'The owner role can read message bodies in the Conversations module, and every conversation opened there is recorded in the audit log. Passwords, private keys, call audio, decrypted media and file contents stay out of this console.',
+ 'i-lock')));
 
       el.innerHTML = parts.join('');
       afterRender(el);
+    },
+    // Poll refresh: patch data into the live DOM instead of rebuilding the
+    // whole dashboard. It renders the same markup through the real mount into
+    // a detached tree (so the two render paths can never drift apart), then
+    // swaps in only the regions whose content actually changed. Canvases,
+    // scroll position and hover state in untouched regions simply survive.
+    // Returns true when the refresh was applied; false asks the shell to do a
+    // normal mount instead (first paint, or an error state).
+    async refresh(el, ctx) {
+      if (!el.querySelector('[data-poll-region]')) return false;
+      const stage = window.document.createElement('div');
+      await this.mount(stage, ctx);
+      if (!stage.querySelector('[data-poll-region]')) return false;
+      const liveRegions = {};
+      el.querySelectorAll('[data-poll-region]').forEach((node) => {
+        liveRegions[node.getAttribute('data-poll-region')] = node;
+      });
+      const changed = [];
+      stage.querySelectorAll('[data-poll-region]').forEach((fresh) => {
+        const id = fresh.getAttribute('data-poll-region');
+        const live = liveRegions[id];
+        if (!live) return;                     // structure shifted — leave it to a normal mount
+        delete liveRegions[id];
+        if (live.innerHTML !== fresh.innerHTML) {
+          live.innerHTML = fresh.innerHTML;
+          changed.push(live);
+        }
+      });
+      if (changed.length) {
+        if (LL.charts && typeof LL.charts.prune === 'function') LL.charts.prune();
+        changed.forEach((region) => afterRender(region));
+      }
+      return true;
     },
   };
 
@@ -405,6 +444,8 @@ LL.views = {};
     subtitle: 'Accounts and profiles',
     icon: 'i-users',
     group: 'Operations',
+      // Sidebar count from the server summary.
+      navCount: 'users',
     async mount(el, ctx) {
       const query = ctx.state.filters.users || { search: '', status: '' };
       el.innerHTML = ui.skeletonPanel(6);
@@ -477,6 +518,8 @@ LL.views = {};
     subtitle: 'Registered hardware',
     icon: 'i-devices',
     group: 'Operations',
+      // Sidebar count from the server summary.
+      navCount: 'devices',
     async mount(el, ctx) {
       const query = ctx.state.filters.devices || { search: '', presence: '' };
       el.innerHTML = ui.skeletonPanel(6);
@@ -554,6 +597,8 @@ LL.views = {};
     subtitle: 'Authenticated sessions',
     icon: 'i-key',
     group: 'Operations',
+      // Sidebar count from the server summary.
+      navCount: 'active_sessions',
     async mount(el, ctx) {
       el.innerHTML = ui.skeletonPanel(5);
       const [userSessions, adminSessions] = await Promise.all([
@@ -1106,6 +1151,238 @@ LL.views = {};
     },
   };
 
+  // ----------------------------------------------------------------- conversations
+  const conversations = {
+    id: 'conversations',
+    title: 'Conversations',
+    subtitle: 'Message review',
+    icon: 'i-message',
+    group: 'Trust & Compliance',
+    // Owner only. Reading what users said to each other is the most sensitive
+    // action in this console, so the server refuses every other role and writes
+    // an audit entry each time a conversation is opened.
+    roles: ['owner'],
+    async mount(el, ctx) {
+      const scope = {
+        mode: 'list', kind: '', a: '', b: '', groupId: '', groupName: '', memberCount: 0,
+        participants: [], messages: [], cursor: '', hasMore: false, rows: [], error: '', loading: false,
+      };
+
+      const root = document.createElement('div');
+      el.innerHTML = '';
+      el.appendChild(root);
+
+      const personName = (p) => p.username || p.name || p.id || '—';
+      const threadTitle = (row) => {
+        if (row.kind === 'group') return row.group_name || row.group_id;
+        const people = (row.participants || []).map(personName);
+        return people.join('  ↔  ') || row.id;
+      };
+
+      // One row per message: who wrote it, when, what they wrote, and how the
+      // server handled it. Bodies are escaped like every other server value in
+      // this console, and line breaks survive because CSS preserves them.
+      function messageList(messages) {
+        return `<div class="msg-thread">${messages.map((m) => `
+          <div class="msg-row">
+            <div class="msg-head">
+              <strong>${ui.esc(m.sender_name || m.sender_id)}</strong>
+              ${m.sender_username ? `<span class="msg-user">${ui.esc(m.sender_username)}</span>` : ''}
+              <span class="msg-time">${ui.esc(fmt.dateTime(m.created_at))}</span>
+            </div>
+            <div class="msg-body">${ui.esc(m.body)}</div>
+            <div class="msg-meta">
+              ${ui.statusBadge(m.status || 'sent')}
+              ${m.delivered_at ? `<span class="subtle">delivered ${ui.esc(fmt.dateTime(m.delivered_at))}</span>` : ''}
+            </div>
+          </div>`).join('')}</div>`;
+      }
+
+      function auditNotice() {
+        return ui.note('Reading is recorded',
+          'The owner role can read message bodies on this server. Every conversation opened here is written to the audit log with your administrator name, the participants and the time.',
+          'i-audit');
+      }
+
+      function listPanel() {
+        if (!scope.rows.length) {
+          return ui.panel({
+            title: 'Conversations', subtitle: 'Nothing has been exchanged yet',
+            body: ui.emptyState({
+              icon: 'i-message',
+              title: 'No messages on this server yet',
+              message: 'Conversations appear here once devices start exchanging messages.',
+            }),
+          });
+        }
+        const total = scope.rows.reduce((sum, row) => sum + (row.message_count || 0), 0);
+        return ui.panel({
+          title: 'Conversations',
+          subtitle: 'Metadata only — opening one returns its messages and is recorded',
+          actions: `${ui.badge(`${scope.rows.length} thread(s)`, 'neutral')}${ui.badge(`${total} message(s)`, 'neutral')}`,
+          pad0: true,
+          body: `<div style="padding:16px">${ui.table({
+            columns: [
+              { label: 'Type' }, { label: 'People' }, { label: 'Messages', numeric: true },
+              { label: 'Last activity' }, { label: '' },
+            ],
+            rows: scope.rows.map((row) => {
+              const people = row.participants || [];
+              const attrs = row.kind === 'group'
+                ? `data-conversation-open data-kind="group" data-group="${ui.esc(row.group_id)}"`
+                : `data-conversation-open data-kind="direct" data-a="${ui.esc(people[0] ? people[0].id : '')}" data-b="${ui.esc(people[1] ? people[1].id : '')}"`;
+              return [
+                row.kind === 'group' ? ui.badge('Group', 'neutral') : ui.badge('Direct', 'neutral'),
+                ui.esc(threadTitle(row)),
+                ui.esc(fmt.number(row.message_count || 0)),
+                `<span class="subtle">${ui.esc(fmt.dateTime(row.last_message_at))}</span>`,
+                `<button class="btn btn-ghost btn-sm" ${attrs}>${ui.icon('i-chevron-right')}Open</button>`,
+              ];
+            }),
+            emptyTitle: 'No conversations',
+            emptyMessage: '',
+          })}</div>`,
+        });
+      }
+
+      function threadPanel() {
+        const ordered = scope.messages.slice().reverse();
+        const title = scope.kind === 'group'
+          ? (scope.groupName || scope.groupId)
+          : (scope.participants || []).map(personName).join('  ↔  ');
+        const subtitle = scope.kind === 'group'
+          ? `Group conversation · ${fmt.number(scope.memberCount || 0)} member(s)`
+          : 'Direct conversation';
+        const body = ordered.length
+          ? messageList(ordered)
+            + (scope.hasMore
+              ? `<div style="margin-top:12px"><button class="btn btn-ghost btn-sm" data-conversation-older>${ui.icon('i-chevron-down')}Load older messages</button></div>`
+              : '')
+            + `<div class="type-caption" style="margin-top:12px">Showing ${ui.esc(fmt.number(ordered.length))} message(s), newest first. This read was recorded in the audit log.</div>`
+          : ui.emptyState({
+            icon: 'i-message',
+            title: 'No messages in this conversation',
+            message: 'The pairing exists but nothing has been exchanged yet.',
+          });
+        return ui.panel({
+          title, subtitle,
+          actions: ui.badge('Access recorded', 'success'),
+          body,
+        });
+      }
+
+      function draw() {
+        root.innerHTML = `<div class="section">
+          ${ui.sectionHead({
+            title: 'Conversations',
+            subtitle: 'Review the messages exchanged on this server',
+            icon: 'i-message',
+            actions: scope.mode === 'thread'
+              ? `<button class="btn btn-ghost btn-sm" data-conversation-back>${ui.icon('i-chevron-left')}All conversations</button>`
+              : ui.badge('Owner only', 'warning'),
+          })}
+          ${auditNotice()}
+          ${scope.loading
+            ? ui.skeletonPanel(4)
+            : (scope.error ? ui.panel({ body: ui.errorState(scope.error, 'conversations') })
+              : (scope.mode === 'thread' ? threadPanel() : listPanel()))}
+        </div>`;
+      }
+
+      async function loadList() {
+        scope.loading = true;
+        scope.error = '';
+        draw();
+        const result = await settle(ctx.api('/api/v1/admin/conversations?limit=100'));
+        scope.loading = false;
+        if (!result.ok) scope.error = result.error;
+        else scope.rows = Array.isArray(result.data.conversations) ? result.data.conversations : [];
+        draw();
+      }
+
+      function threadPath(cursor) {
+        const base = scope.kind === 'group'
+          ? `/api/v1/admin/group-conversation?group_id=${encodeURIComponent(scope.groupId)}`
+          : `/api/v1/admin/conversation?user_a=${encodeURIComponent(scope.a)}&user_b=${encodeURIComponent(scope.b)}`;
+        return `${base}&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+      }
+
+      async function openThread(attrs) {
+        scope.mode = 'thread';
+        scope.kind = attrs.kind;
+        scope.a = attrs.a || '';
+        scope.b = attrs.b || '';
+        scope.groupId = attrs.group || '';
+        scope.groupName = '';
+        scope.memberCount = 0;
+        scope.participants = [];
+        scope.messages = [];
+        scope.cursor = '';
+        scope.hasMore = false;
+        scope.error = '';
+        scope.loading = true;
+        draw();
+        const result = await settle(ctx.api(threadPath('')));
+        scope.loading = false;
+        if (!result.ok) {
+          // A refusal or a throttle is reported exactly as the server sent it.
+          scope.error = result.error;
+          draw();
+          return;
+        }
+        scope.messages = Array.isArray(result.data.messages) ? result.data.messages : [];
+        scope.cursor = result.data.next_cursor || '';
+        scope.hasMore = !!result.data.has_more;
+        scope.participants = result.data.participants || [];
+        scope.groupName = result.data.group_name || '';
+        scope.memberCount = result.data.member_count || 0;
+        draw();
+      }
+
+      async function loadOlder() {
+        if (!scope.cursor) return;
+        scope.loading = true;
+        draw();
+        const result = await settle(ctx.api(threadPath(scope.cursor)));
+        scope.loading = false;
+        if (!result.ok) {
+          scope.error = result.error;
+          draw();
+          return;
+        }
+        const older = Array.isArray(result.data.messages) ? result.data.messages : [];
+        scope.messages = scope.messages.concat(older);
+        scope.cursor = result.data.next_cursor || '';
+        scope.hasMore = !!result.data.has_more;
+        draw();
+      }
+
+      root.addEventListener('click', (event) => {
+        const open = event.target.closest('[data-conversation-open]');
+        if (open) {
+          openThread({
+            kind: open.getAttribute('data-kind') || 'direct',
+            a: open.getAttribute('data-a') || '',
+            b: open.getAttribute('data-b') || '',
+            group: open.getAttribute('data-group') || '',
+          });
+          return;
+        }
+        if (event.target.closest('[data-conversation-back]')) {
+          scope.mode = 'list';
+          scope.error = '';
+          draw();
+          return;
+        }
+        if (event.target.closest('[data-conversation-older]')) {
+          loadOlder();
+        }
+      });
+
+      await loadList();
+    },
+  };
+
   // -------------------------------------------------------------------- privacy
   const privacy = {
     id: 'privacy',
@@ -1119,11 +1396,31 @@ LL.views = {};
       el.innerHTML = `
         <div class="section">
           ${ui.sectionHead({ title: 'Privacy & access', subtitle: 'What the console may read, and what remains private', icon: 'i-privacy' })}
-          ${ui.note('Privacy boundary',
-            'Passwords, private keys, message bodies, call audio and decrypted media are never exposed to this console. Everything shown is operational metadata.',
+          ${ui.note('Message review is switched on',
+            'Message bodies are stored as users write them, and the owner role can read them in the Conversations module. Every conversation opened there is written to the audit log. Passwords, private keys, call audio, decrypted media and file contents remain unexposed.',
             'i-lock')}
           ${ui.panel({
-            title: 'Server privacy policy', subtitle: 'Reported by the LocalLink server',
+            title: 'What this console can read',
+            subtitle: 'Reported by the server, shown as reported',
+            body: result.ok
+              ? ui.table({
+                columns: [{ label: 'Content' }, { label: 'Reachable here' }, { label: 'Detail' }],
+                rows: [
+                  ['Message bodies',
+                    result.data.private_message_bodies_exposed ? ui.badge('Owner only', 'warning') : ui.badge('No', 'success'),
+                    result.data.message_body_access_audited === false ? 'Reading is not recorded' : 'Every read is recorded in the audit log'],
+                  ['Passwords', result.data.passwords_exposed ? ui.badge('Exposed', 'danger') : ui.badge('No', 'success'), 'Only hashes and salts are stored'],
+                  ['Private keys', result.data.private_keys_exposed ? ui.badge('Exposed', 'danger') : ui.badge('No', 'success'), 'Device identity keys stay on the device'],
+                  ['Call audio', result.data.private_call_audio_exposed ? ui.badge('Exposed', 'danger') : ui.badge('No', 'success'), 'The server relays signalling, not call media'],
+                  ['File contents', result.data.private_file_contents_exposed ? ui.badge('Exposed', 'danger') : ui.badge('No', 'success'), 'Transfers carry their own attachment crypto'],
+                ],
+                emptyTitle: 'Nothing reported',
+                emptyMessage: '',
+              })
+              : ui.errorState(result.error, 'privacy'),
+          })}}
+          ${ui.panel({
+            title: 'Raw server response', subtitle: 'The full policy exactly as this server returned it',
             body: result.ok
               ? `<pre class="mono" style="white-space:pre-wrap;margin:0;color:var(--text-secondary)">${ui.esc(JSON.stringify(result.data, null, 2))}</pre>`
               : ui.errorState(result.error, 'privacy'),
@@ -1140,9 +1437,9 @@ LL.views = {};
     },
   };
 
-  LL.views = { dashboard, users, devices, sessions, network, calls, transfers, security, audit, recovery, diagnostics, settings, privacy };
+  LL.views = { dashboard, users, devices, sessions, network, calls, transfers, security, audit, recovery, diagnostics, settings, privacy, conversations };
 
   // Modules that are restricted to specific roles (used by quick actions too).
-  LL.moduleRoles = { settings: ['owner'] };
+  LL.moduleRoles = { settings: ['owner'], conversations: ['owner'] };
 
 })();

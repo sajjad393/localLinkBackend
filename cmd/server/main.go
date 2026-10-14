@@ -110,6 +110,10 @@ func main() {
 	mux.HandleFunc("GET /api/v1/admin/privacy", api.AdminPrivacyPolicy)
 	mux.HandleFunc("GET /api/v1/admin/devices", api.AdminDevices)
 	mux.HandleFunc("GET /api/v1/admin/groups", api.AdminGroups)
+	// Conversation review is owner-only and audited; see admin_conversations.go.
+	mux.HandleFunc("GET /api/v1/admin/conversations", api.AdminConversations)
+	mux.HandleFunc("GET /api/v1/admin/conversation", api.AdminConversation)
+	mux.HandleFunc("GET /api/v1/admin/group-conversation", api.AdminGroupConversation)
 	mux.HandleFunc("GET /api/v1/admin/calls", api.AdminCalls)
 	mux.HandleFunc("GET /api/v1/admin/logs", api.AdminLogs)
 	mux.HandleFunc("GET /api/v1/admin/security-events", api.AdminSecurityEvents)

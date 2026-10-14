@@ -27,6 +27,9 @@
     manageRecovery: ['owner', 'operator', 'security'],
     manageNetworkPolicy: ['owner', 'operator'],
     managePrivacy: ['owner'],
+    // Reading what users said to each other. Owner only: the most sensitive
+    // capability in this console, and every read is audit-logged server-side.
+    readConversations: ['owner'],
   };
 
   const RANGES = ['24h', '7d', '30d', '90d'];
@@ -37,6 +40,9 @@
     view: 'dashboard',
     analyticsRange: RANGES.indexOf(localStorage.getItem(RANGE_KEY)) >= 0 ? localStorage.getItem(RANGE_KEY) : '24h',
     filters: { users: { search: '', status: '' }, devices: { search: '', presence: '' }, audit: { search: '' } },
+      // Latest /api/v1/admin/summary payload, used for the sidebar counts.
+      // Empty until the server answers, so no figure is invented here.
+      summary: {},
     refreshSeconds: 15,
     notifications: [],
     unread: 0,
@@ -142,7 +148,7 @@
       read: 'view operational data', manageUsers: 'manage accounts', manageDevices: 'manage devices',
       manageSessions: 'revoke sessions', manageSettings: 'change server settings', backup: 'create database backups',
       manageRecovery: 'review recovery requests', manageNetworkPolicy: 'change transport policy',
-      managePrivacy: 'review privacy policy',
+      managePrivacy: 'review privacy policy', readConversations: 'read user conversations',
     };
     return 'This role may ' + granted.map((p) => labels[p] || p).join(', ') + '.';
   }
@@ -429,6 +435,23 @@
     return Object.keys(LL.views).map((key) => LL.views[key]);
   }
 
+  // A module may declare which server figure belongs beside its name, such as
+
+  // Devices or active sessions. The number comes from the summary the shell
+
+  // already fetched; while it is unknown the badge is simply absent.
+
+  function navCount(view) {
+
+    if (!view.navCount) return null;
+
+    const value = state.summary ? state.summary[view.navCount] : null;
+
+    return typeof value === 'number' && isFinite(value) ? value : null;
+
+  }
+
+
   function renderNav() {
     const groups = {};
     moduleList().forEach((view) => {
@@ -445,6 +468,8 @@
           ${ui.icon(view.icon)}
           <span class="nav-label">${ui.esc(view.title)}</span>
           ${restricted(view) ? `<span class="nav-meta">${ui.esc((view.roles || []).join('/'))}</span>` : ''}
+          ${navCount(view) !== null ? `<span class="nav-count">${navCount(view) > 999 ? '999+' : String(navCount(view))}</span>` : ''}
+
           ${view.id === 'security' && state.unread > 0 ? `<span class="nav-badge">${state.unread > 99 ? '99+' : state.unread}</span>` : ''}
         </button>`).join('')}
       </div>`).join('');
@@ -459,9 +484,12 @@
   async function mountView(viewId, options) {
     const opts = options || {};
     const view = LL.views[viewId] || LL.views.dashboard;
+    // Poll refreshes patch data in place: no full unmount, no chart teardown,
+    // and never closing an overlay the operator may be using.
+    const canPatch = opts.refresh && typeof view.refresh === 'function';
     state.view = viewId;
-    closeOverlays();
-    LL.charts.reset();
+    if (!canPatch) closeOverlays();
+    if (!canPatch) LL.charts.reset();
 
     const restricted = view.roles && view.roles.indexOf(state.session.role) < 0;
     $('crumb-view').textContent = view.title;
@@ -492,6 +520,15 @@
       refresh: () => mountView(state.view),
       navigate: (id) => mountView(id),
     };
+
+    if (canPatch) {
+      try {
+        if (await view.refresh(target, context)) return;
+      } catch (err) {
+        // A failed patch falls through to the normal (quiet) mount path;
+        // the operator loses nothing either way.
+      }
+    }
 
     const previous = target.innerHTML;
     if (!opts.quiet) target.innerHTML = ui.skeletonPanel(5);
@@ -803,6 +840,9 @@
 
     if (target.hasAttribute('data-action')) {
       const action = target.getAttribute('data-action');
+      // Quick-action cards navigate; without this branch they sat there and
+      // did nothing when clicked.
+      if (action.indexOf('nav:') === 0) { mountView(action.slice(4)); return; }
       if (action === 'backup') {
         const confirmed = await confirmDialog({
           title: 'Create database backup', confirmLabel: 'Create backup',
@@ -932,6 +972,27 @@
     return seconds * 1000;
   }
 
+  // Sidebar counts ride along with the existing poll: one extra request, and a
+
+  // failure leaves the previous figures in place rather than blanking them.
+
+  async function refreshSummary() {
+
+    try {
+
+      state.summary = await api('/api/v1/admin/summary');
+
+      renderNav();
+
+    } catch (err) {
+
+      // The notification panel already reports an unreachable server.
+
+    }
+
+  }
+
+
   function schedulePoll() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(() => {
@@ -939,7 +1000,9 @@
       // Notifications are a single lightweight request and keep the badge
       // honest; the heavier view refresh only runs on the dashboard.
       loadNotifications();
-      if (state.view === 'dashboard') mountView('dashboard', { quiet: true });
+
+      refreshSummary();
+      if (state.view === 'dashboard') mountView('dashboard', { quiet: true, refresh: true });
     }, pollIntervalMs());
   }
 
@@ -965,7 +1028,7 @@
     try { identity = JSON.parse(sessionStorage.getItem(IDENTITY_KEY) || 'null'); } catch (err) { identity = null; }
     state.session = identity || { username: 'Authenticated administrator', role: 'auditor' };
     try {
-      await api('/api/v1/admin/summary');
+      state.summary = await api('/api/v1/admin/summary');
       showApp();
     } catch (err) {
       showLogin();

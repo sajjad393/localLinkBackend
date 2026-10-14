@@ -75,6 +75,10 @@ type AdminSettings struct {
 	BackupAvailable         bool `json:"backup_available"`
 }
 
+// AdminPrivacyPolicy reports what this server does with user content. Message
+// bodies are stored as users write them and the owner role can read them
+// through the conversation review endpoints, so the policy says so plainly
+// instead of promising users something the server does not enforce.
 type AdminPrivacyPolicy struct {
 	PasswordsExposed             bool `json:"passwords_exposed"`
 	PrivateKeysExposed           bool `json:"private_keys_exposed"`
@@ -84,6 +88,11 @@ type AdminPrivacyPolicy struct {
 	PrivateFileContentsExposed   bool `json:"private_file_contents_exposed"`
 	AdministrativeActionsAudited bool `json:"administrative_actions_audited"`
 	ServerSideRoleChecks         bool `json:"server_side_role_checks"`
+	// MessageBodyAccessRole names the role that may read message bodies, and
+	// MessageBodyAccessAudited records that every such read is written to the
+	// audit log. Both are reported here so the console never has to guess.
+	MessageBodyAccessRole    string `json:"message_body_access_role"`
+	MessageBodyAccessAudited bool   `json:"message_body_access_audited"`
 }
 
 func (a *API) AdminUsers(w http.ResponseWriter, r *http.Request) {
@@ -522,11 +531,13 @@ func (a *API) AdminPrivacyPolicy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, AdminPrivacyPolicy{
 		PasswordsExposed:             false,
 		PrivateKeysExposed:           false,
-		PrivateMessageBodiesExposed:  false,
+		PrivateMessageBodiesExposed:  true,
 		PrivateCallAudioExposed:      false,
 		DecryptedCallMediaExposed:    false,
 		PrivateFileContentsExposed:   false,
 		AdministrativeActionsAudited: true,
 		ServerSideRoleChecks:         true,
+		MessageBodyAccessRole:        "owner",
+		MessageBodyAccessAudited:     true,
 	})
 }
