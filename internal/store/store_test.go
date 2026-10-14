@@ -262,20 +262,28 @@ func TestPhase59StrictMigrationLedgerFreshInstall(t *testing.T) {
 	}
 	defer st.Close()
 
+	wantVersion := legacyMigrationBaselineVersion
+	for _, spec := range orderedMigrationSpecs() {
+		if spec.Version > wantVersion {
+			wantVersion = spec.Version
+		}
+	}
+
 	var maxVersion int
 	if err := st.DB().QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil {
 		t.Fatal(err)
 	}
-	if maxVersion != 53 {
-		t.Fatalf("schema version=%d, want latest ordered migration 53", maxVersion)
+	if maxVersion != wantVersion {
+		t.Fatalf("schema version=%d, want latest ordered migration %d", maxVersion, wantVersion)
 	}
 
+	wantLedger := 1 + len(orderedMigrationSpecs())
 	var ledgerCount int
 	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM schema_migration_ledger`).Scan(&ledgerCount); err != nil {
 		t.Fatal(err)
 	}
-	if ledgerCount != 4 {
-		t.Fatalf("ledger rows=%d, want 4 (baseline + 51-53)", ledgerCount)
+	if ledgerCount != wantLedger {
+		t.Fatalf("ledger rows=%d, want %d (baseline + ordered specs)", ledgerCount, wantLedger)
 	}
 
 	var name, checksum string
@@ -357,7 +365,14 @@ func TestPhase59RejectsDatabaseFromFutureMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.DB().Exec(`INSERT INTO schema_migrations(version) VALUES(54)`); err != nil {
+	futureVersion := legacyMigrationBaselineVersion
+	for _, spec := range orderedMigrationSpecs() {
+		if spec.Version > futureVersion {
+			futureVersion = spec.Version
+		}
+	}
+	futureVersion++
+	if _, err := st.DB().Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, futureVersion); err != nil {
 		st.Close()
 		t.Fatal(err)
 	}

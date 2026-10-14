@@ -47,3 +47,8 @@ func newTestAPI(t *testing.T) (*store.Store, *API) {
 	t.Cleanup(func() { _ = st.Close() })
 	return st, New(st)
 }
+
+func newTestStore(t *testing.T) (*store.Store, error) {
+	t.Helper()
+	return store.Open(t.TempDir() + "/locallink.db")
+}

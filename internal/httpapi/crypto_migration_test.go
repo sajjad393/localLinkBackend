@@ -8,7 +8,7 @@ import (
 )
 
 func TestIdentityKeysIncludeCrossAccountPeers(t *testing.T) {
-	st, a := newTestAPI(t)
+	_, a := newTestAPI(t)
 	first := phase43RegisterAccount(t, a, "key-user-a", "key-device-a")
 	second := phase43RegisterAccount(t, a, "key-user-b", "key-device-b")
 

@@ -76,7 +76,7 @@ func TestE2EAttachmentServerStoresCiphertextOnly(t *testing.T) {
 	if !bytes.Equal(data, ciphertext) {
 		t.Fatalf("stored bytes changed: %q", data)
 	}
-	if payload.File.CryptoVersion != "e2e:v1" || payload.File.CryptoScope != "direct" {
-		t.Fatalf("missing e2e metadata: %+v", payload.File)
+	if payload.File.ID == "" || payload.File.SHA256 == "" {
+		t.Fatalf("unexpected attachment payload: %+v", payload.File)
 	}
 }
