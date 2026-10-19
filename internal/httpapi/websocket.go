@@ -13,37 +13,39 @@ import (
 )
 
 type WSMessage struct {
-	Type                string       `json:"type"`
-	ID                  string       `json:"id,omitempty"`
-	SenderID            string       `json:"sender_id,omitempty"`
-	RecipientID         string       `json:"recipient_id,omitempty"`
-	Body                string       `json:"body,omitempty"`
-	CreatedAt           string       `json:"created_at,omitempty"`
-	Status              string       `json:"status,omitempty"`
-	ClientMessageID     string       `json:"client_message_id,omitempty"`
-	ServerSeq           int64        `json:"server_seq,omitempty"`
-	GroupID             string       `json:"group_id,omitempty"`
-	AttachmentIDs       []string     `json:"attachment_ids,omitempty"`
-	Attachments         []Attachment `json:"attachments,omitempty"`
-	CallID              string       `json:"call_id,omitempty"`
-	Reason              string       `json:"reason,omitempty"`
-	TransportMode       string       `json:"transport_mode,omitempty"`
-	SelectedMediaCodec  string       `json:"selected_media_codec,omitempty"`
-	Error               string       `json:"error,omitempty"`
-	ErrorCode           string       `json:"error_code,omitempty"`
-	RetryAfter          int          `json:"retry_after,omitempty"`
-	DeviceID            string       `json:"device_id,omitempty"`
-	NetworkStatus       string       `json:"network_status,omitempty"`
-	ServerConnected     bool         `json:"server_connected,omitempty"`
-	WiFiDirectConnected bool         `json:"wifi_direct_connected,omitempty"`
-	StatusUpdatedAt     string       `json:"status_updated_at,omitempty"`
-	LastSeenAt          string       `json:"last_seen_at,omitempty"`
-	SigningPublicKey    string       `json:"signing_public_key,omitempty"`
-	WiFiControlCapable  bool         `json:"wifi_control_capable,omitempty"`
-	ManagedDevice       bool         `json:"managed_device,omitempty"`
-	WiFiEnabled         bool         `json:"wifi_enabled,omitempty"`
-	LanAvailable        bool         `json:"lan_available,omitempty"`
-	MeshAvailable       bool         `json:"mesh_available,omitempty"`
+	Type                 string       `json:"type"`
+	ID                   string       `json:"id,omitempty"`
+	SenderID             string       `json:"sender_id,omitempty"`
+	RecipientID          string       `json:"recipient_id,omitempty"`
+	Body                 string       `json:"body,omitempty"`
+	CreatedAt            string       `json:"created_at,omitempty"`
+	Status               string       `json:"status,omitempty"`
+	ClientMessageID      string       `json:"client_message_id,omitempty"`
+	ServerSeq            int64        `json:"server_seq,omitempty"`
+	GroupID              string       `json:"group_id,omitempty"`
+	AttachmentIDs        []string     `json:"attachment_ids,omitempty"`
+	Attachments          []Attachment `json:"attachments,omitempty"`
+	CallID               string       `json:"call_id,omitempty"`
+	Reason               string       `json:"reason,omitempty"`
+	TransportMode        string       `json:"transport_mode,omitempty"`
+	SelectedMediaCodec   string       `json:"selected_media_codec,omitempty"`
+	SupportedMediaCodecs []string     `json:"supported_media_codecs,omitempty"`
+	Enabled              *bool        `json:"enabled,omitempty"`
+	Error                string       `json:"error,omitempty"`
+	ErrorCode            string       `json:"error_code,omitempty"`
+	RetryAfter           int          `json:"retry_after,omitempty"`
+	DeviceID             string       `json:"device_id,omitempty"`
+	NetworkStatus        string       `json:"network_status,omitempty"`
+	ServerConnected      bool         `json:"server_connected,omitempty"`
+	WiFiDirectConnected  bool         `json:"wifi_direct_connected,omitempty"`
+	StatusUpdatedAt      string       `json:"status_updated_at,omitempty"`
+	LastSeenAt           string       `json:"last_seen_at,omitempty"`
+	SigningPublicKey     string       `json:"signing_public_key,omitempty"`
+	WiFiControlCapable   bool         `json:"wifi_control_capable,omitempty"`
+	ManagedDevice        bool         `json:"managed_device,omitempty"`
+	WiFiEnabled          bool         `json:"wifi_enabled,omitempty"`
+	LanAvailable         bool         `json:"lan_available,omitempty"`
+	MeshAvailable        bool         `json:"mesh_available,omitempty"`
 }
 
 func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
@@ -183,7 +185,7 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 				}
 				_ = client.WriteText(mustJSON(WSMessage{Type: "call_invite_ack", CallID: call.ID, SenderID: call.CallerID, RecipientID: call.CalleeID, Status: call.Status, CreatedAt: call.StartedAt}))
 				if !existing {
-					a.hub.SendTo(call.CalleeID, mustJSON(WSMessage{Type: "call_invite", CallID: call.ID, SenderID: call.CallerID, RecipientID: call.CalleeID, Status: call.Status, CreatedAt: call.StartedAt}))
+					a.hub.SendTo(call.CalleeID, mustJSON(WSMessage{Type: "call_invite", CallID: call.ID, SenderID: call.CallerID, RecipientID: call.CalleeID, Status: call.Status, CreatedAt: call.StartedAt, TransportMode: msg.TransportMode, SupportedMediaCodecs: msg.SupportedMediaCodecs}))
 				}
 			case "call_accept", "call_reject", "call_end", "call_busy":
 				if strings.TrimSpace(msg.CallID) == "" {
@@ -241,6 +243,53 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 				}
 				_ = client.WriteText(mustJSON(WSMessage{Type: "call_state", CallID: updated.ID, SenderID: updated.CallerID, RecipientID: updated.CalleeID, Status: updated.Status, CreatedAt: updated.StartedAt, Reason: updated.EndReason}))
 				a.hub.SendTo(peerID, mustJSON(WSMessage{Type: "call_state", CallID: updated.ID, SenderID: updated.CallerID, RecipientID: updated.CalleeID, Status: updated.Status, CreatedAt: updated.StartedAt, Reason: updated.EndReason}))
+			case "call_invite_ack":
+				// Callee acknowledges the ring to the caller. Mirrors the mesh
+				// copy; harmless when mesh delivered it first (app dedupes).
+				if strings.TrimSpace(msg.CallID) == "" {
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", Error: "call_id is required"}))
+					continue
+				}
+				call, err := a.callForParticipant(msg.CallID, deviceID)
+				if err != nil {
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, Error: err.Error()}))
+					continue
+				}
+				if deviceID != call.CalleeID || call.Status != "ringing" {
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, Error: "only the callee can ack a ringing call"}))
+					continue
+				}
+				if !a.allowCallSignaling(deviceID) {
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, ErrorCode: "CALL_SIGNAL_RATE_LIMITED", Error: "call signaling rate limit exceeded", RetryAfter: 30}))
+					continue
+				}
+				a.hub.SendTo(call.CallerID, mustJSON(WSMessage{Type: "call_invite_ack", CallID: call.ID, SenderID: call.CalleeID, RecipientID: call.CallerID, Status: "ringing", CreatedAt: call.StartedAt}))
+			case "call_peer_video_state":
+				// Video upgrade/downgrade signal relay. Forwards to the other
+				// participant verbatim; the app currently emits these over mesh
+				// but the relay makes the path available to app-side fallback.
+				if strings.TrimSpace(msg.CallID) == "" {
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", Error: "call_id is required"}))
+					continue
+				}
+				call, err := a.callForParticipant(msg.CallID, deviceID)
+				if err != nil {
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, Error: err.Error()}))
+					continue
+				}
+				if call.Status != "ringing" && call.Status != "connected" {
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, Error: "call is no longer active"}))
+					continue
+				}
+				if !a.allowCallSignaling(deviceID) {
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, ErrorCode: "CALL_SIGNAL_RATE_LIMITED", Error: "call signaling rate limit exceeded", RetryAfter: 30}))
+					continue
+				}
+				peerID := call.CalleeID
+				if peerID == deviceID {
+					peerID = call.CallerID
+				}
+				a.hub.SendTo(peerID, mustJSON(WSMessage{Type: "call_peer_video_state", CallID: call.ID, SenderID: deviceID, RecipientID: peerID, Status: call.Status, Enabled: msg.Enabled, SelectedMediaCodec: msg.SelectedMediaCodec}))
 			case "call_heartbeat":
 				if strings.TrimSpace(msg.CallID) == "" {
 					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, Error: "call_id is required"}))
