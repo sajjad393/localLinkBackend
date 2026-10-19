@@ -12,4 +12,4 @@ node_modules/
 data/
 *.db
 *.db-wal
-*.db-shm
+*.db-shmdata/locallink.db
