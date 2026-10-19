@@ -114,6 +114,9 @@ func main() {
 	mux.HandleFunc("GET /api/v1/admin/conversations", api.AdminConversations)
 	mux.HandleFunc("GET /api/v1/admin/conversation", api.AdminConversation)
 	mux.HandleFunc("GET /api/v1/admin/group-conversation", api.AdminGroupConversation)
+	// Owner-only, audit-logged media streaming for the conversation console;
+	// it never reuses the user file routes, whose bearer it does not accept.
+	mux.HandleFunc("GET /api/v1/admin/conversation-media", api.AdminConversationMedia)
 	mux.HandleFunc("GET /api/v1/admin/calls", api.AdminCalls)
 	mux.HandleFunc("GET /api/v1/admin/logs", api.AdminLogs)
 	mux.HandleFunc("GET /api/v1/admin/security-events", api.AdminSecurityEvents)

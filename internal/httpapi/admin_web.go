@@ -63,7 +63,11 @@ func (a *API) AdminWeb(w http.ResponseWriter, r *http.Request) {
 		"default-src 'self'",
 		"script-src 'self'",
 		"style-src 'self' 'unsafe-inline'",
-		"img-src 'self' data:",
+		// blob: because conversation media is fetched with the bearer token and
+		// rendered from object URLs (no cookie auth means <img>/<audio> cannot
+		// point at the API directly).
+		"img-src 'self' data: blob:",
+		"media-src 'self' blob:",
 		"connect-src 'self'",
 		"font-src 'self'",
 		"base-uri 'none'",

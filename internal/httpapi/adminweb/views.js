@@ -1166,6 +1166,7 @@ LL.views = {};
       const scope = {
         mode: 'list', kind: '', a: '', b: '', groupId: '', groupName: '', memberCount: 0,
         participants: [], messages: [], cursor: '', hasMore: false, rows: [], error: '', loading: false,
+        objectUrls: [],
       };
 
       const root = document.createElement('div');
@@ -1179,23 +1180,160 @@ LL.views = {};
         return people.join('  ↔  ') || row.id;
       };
 
-      // One row per message: who wrote it, when, what they wrote, and how the
-      // server handled it. Bodies are escaped like every other server value in
+      // The thread renders like the phone app: bubbles against neutral
+      // surfaces, 82% maximum width, a rounded corner that tightens on the
+      // sender side, a 12-hour clock and the app's ✓ / ✓✓ delivery ticks. The
+      // second participant of a direct conversation sits on the right; every
+      // group sender stays on the left with the author name above the bubble.
+      // Bodies and file names are escaped like every other server value in
       // this console, and line breaks survive because CSS preserves them.
-      function messageList(messages) {
-        return `<div class="msg-thread">${messages.map((m) => `
-          <div class="msg-row">
-            <div class="msg-head">
-              <strong>${ui.esc(m.sender_name || m.sender_id)}</strong>
-              ${m.sender_username ? `<span class="msg-user">${ui.esc(m.sender_username)}</span>` : ''}
-              <span class="msg-time">${ui.esc(fmt.dateTime(m.created_at))}</span>
+      function time12(iso) {
+        const date = new Date(iso);
+        if (Number.isNaN(date.getTime())) return '';
+        let hours = date.getHours();
+        const suffix = hours >= 12 ? 'PM' : 'AM';
+        hours = hours % 12 || 12;
+        return `${hours}:${String(date.getMinutes()).padStart(2, '0')} ${suffix}`;
+      }
+
+      function tickHtml(status, showTicks) {
+        if (!showTicks) return '';
+        const value = String(status || 'sent').toLowerCase();
+        const cls = value === 'read' ? ' read' : '';
+        const glyph = value === 'sent' ? '✓' : '✓✓';
+        return `<span class="chat-ticks${cls}" title="${ui.esc(value)}">${glyph}</span>`;
+      }
+
+      function sideFor(senderId) {
+        if (scope.kind !== 'group' && scope.participants && scope.participants.length > 1) {
+          return senderId === scope.participants[1].id ? 'out' : 'in';
+        }
+        return 'in';
+      }
+
+      function attachmentHtml(attachment) {
+        const name = attachment.original_name || attachment.id || 'file';
+        const meta = `${attachment.content_type || 'file'} · ${fmt.bytes ? fmt.bytes(attachment.size || 0) : `${attachment.size || 0} B`}`;
+        if (attachment.is_image) {
+          const thumb = attachment.thumbnail_url || attachment.download_url;
+          return `<div class="chat-media is-loading" data-media-kind="image">
+            <button class="chat-img-btn" type="button" data-chat-zoom="${ui.esc(attachment.download_url)}" aria-label="View image ${ui.esc(name)}">
+              <img class="chat-img" alt="${ui.esc(name)}" data-blob-src="${ui.esc(thumb)}">
+            </button>
+            <span class="chat-att-name">${ui.esc(name)} · ${ui.esc(meta)}</span>
+          </div>`;
+        }
+        if (attachment.is_audio) {
+          return `<div class="chat-media is-loading" data-media-kind="audio">
+            <audio controls preload="none" data-blob-src="${ui.esc(attachment.download_url)}"></audio>
+            <span class="chat-att-name">${ui.esc(name)} · ${ui.esc(meta)}</span>
+          </div>`;
+        }
+        return `<div class="chat-media" data-media-kind="file">
+          <button class="chat-file" type="button" data-chat-file="${ui.esc(attachment.download_url)}" data-chat-name="${ui.esc(name)}">
+            ${ui.icon('i-file')}
+            <span class="chat-file-meta"><strong>${ui.esc(name)}</strong><span>${ui.esc(meta)}</span></span>
+            ${ui.icon('i-download')}
+          </button>
+        </div>`;
+      }
+
+      // Honesty rule: if bytes cannot be fetched (file pruned from disk, or
+      // media that only ever travelled device-to-device), the bubble says so
+      // instead of hiding the attachment.
+      function mediaUnavailableCard() {
+        return `<div class="chat-media chat-media-missing">
+          ${ui.icon('i-flag')}
+          <span><strong>Not stored on this server</strong><br>
+          <span class="type-caption">The file is not in server storage — it may have travelled device-to-device only, or been removed.</span></span>
+        </div>`;
+      }
+
+      function bubbleThread(messages) {
+        return `<div class="chat-thread">${messages.map((m) => {
+          const side = sideFor(m.sender_id);
+          const author = m.sender_name || m.sender_id || '—';
+          const attachments = Array.isArray(m.attachments) ? m.attachments : [];
+          return `<div class="chat-row ${side}">
+            <div class="chat-bubble ${side}">
+              ${scope.kind === 'group' ? `<div class="chat-author">${ui.esc(author)}${m.sender_username ? ` <span class="chat-user">${ui.esc(m.sender_username)}</span>` : ''}</div>` : ''}
+              ${String(m.body || '') ? `<div class="chat-body">${ui.esc(m.body)}</div>` : ''}
+              ${attachments.map(attachmentHtml).join('')}
+              <div class="chat-meta">
+                <span>${ui.esc(time12(m.created_at))}</span>
+                ${tickHtml(m.status, side === 'out')}
+              </div>
             </div>
-            <div class="msg-body">${ui.esc(m.body)}</div>
-            <div class="msg-meta">
-              ${ui.statusBadge(m.status || 'sent')}
-              ${m.delivered_at ? `<span class="subtle">delivered ${ui.esc(fmt.dateTime(m.delivered_at))}</span>` : ''}
-            </div>
-          </div>`).join('')}</div>`;
+          </div>`;
+        }).join('')}</div>`;
+      }
+
+      function revokeMedia() {
+        (scope.objectUrls || []).forEach((url) => URL.revokeObjectURL(url));
+        scope.objectUrls = [];
+      }
+
+      // Hydration downloads attachment bytes with the Authorization header
+      // (the console has no cookies, so plain element URLs would be refused)
+      // and swaps every [data-blob-src] element to a same-tab object URL.
+      function hydrateMedia() {
+        root.querySelectorAll('[data-blob-src]').forEach((node) => {
+          if (node.dataset.blobDone) return;
+          node.dataset.blobDone = '1';
+          const url = node.getAttribute('data-blob-src');
+          const wrap = node.closest('.chat-media');
+          ctx.blob(url).then((objectUrl) => {
+            scope.objectUrls.push(objectUrl);
+            if (node.tagName === 'AUDIO') {
+              node.preload = 'metadata';
+              node.src = objectUrl;
+            } else {
+              node.src = objectUrl;
+            }
+            if (wrap) wrap.classList.remove('is-loading');
+          }).catch(() => {
+            if (wrap) wrap.outerHTML = mediaUnavailableCard();
+          });
+        });
+      }
+
+      function openLightbox(url) {
+        closeLightbox();
+        const overlay = document.createElement('div');
+        overlay.className = 'chat-lightbox';
+        overlay.setAttribute('data-chat-lightbox', '');
+        overlay.innerHTML = `<div class="skeleton w-60" style="height:18px"></div>`;
+        overlay.addEventListener('click', closeLightbox);
+        root.appendChild(overlay);
+        ctx.blob(url).then((objectUrl) => {
+          scope.objectUrls.push(objectUrl);
+          if (!overlay.isConnected) { URL.revokeObjectURL(objectUrl); return; }
+          overlay.innerHTML = `<img src="${objectUrl}" alt="Attachment full size">`;
+        }).catch(() => {
+          if (overlay.isConnected) overlay.innerHTML = `<div class="chat-media-missing">${ui.icon('i-flag')}<span><strong>Not stored on this server</strong></span></div>`;
+        });
+      }
+
+      function closeLightbox() {
+        const existing = root.querySelector('[data-chat-lightbox]');
+        if (existing) existing.remove();
+      }
+
+      function downloadAttachment(button) {
+        const url = button.getAttribute('data-chat-file');
+        const name = button.getAttribute('data-chat-name') || 'download';
+        button.disabled = true;
+        ctx.blob(url).then((objectUrl) => {
+          const anchor = document.createElement('a');
+          anchor.href = objectUrl;
+          anchor.download = name;
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
+        }).catch((err) => {
+          ctx.toast ? ctx.toast(err.message || 'Download failed', 'error') : alert(err.message);
+        }).finally(() => { button.disabled = false; });
       }
 
       function auditNotice() {
@@ -1254,11 +1392,11 @@ LL.views = {};
           ? `Group conversation · ${fmt.number(scope.memberCount || 0)} member(s)`
           : 'Direct conversation';
         const body = ordered.length
-          ? messageList(ordered)
-            + (scope.hasMore
-              ? `<div style="margin-top:12px"><button class="btn btn-ghost btn-sm" data-conversation-older>${ui.icon('i-chevron-down')}Load older messages</button></div>`
+          ? (scope.hasMore
+              ? `<div style="margin-bottom:12px"><button class="btn btn-ghost btn-sm" data-conversation-older>${ui.icon('i-chevron-down')}Load older messages</button></div>`
               : '')
-            + `<div class="type-caption" style="margin-top:12px">Showing ${ui.esc(fmt.number(ordered.length))} message(s), newest first. This read was recorded in the audit log.</div>`
+            + bubbleThread(ordered)
+            + `<div class="type-caption" style="margin-top:12px">Showing ${ui.esc(fmt.number(ordered.length))} message(s), oldest at the top like the app. This read was recorded in the audit log.</div>`
           : ui.emptyState({
             icon: 'i-message',
             title: 'No messages in this conversation',
@@ -1272,6 +1410,7 @@ LL.views = {};
       }
 
       function draw() {
+        revokeMedia();
         root.innerHTML = `<div class="section">
           ${ui.sectionHead({
             title: 'Conversations',
@@ -1287,6 +1426,7 @@ LL.views = {};
             : (scope.error ? ui.panel({ body: ui.errorState(scope.error, 'conversations') })
               : (scope.mode === 'thread' ? threadPanel() : listPanel()))}
         </div>`;
+        hydrateMedia();
       }
 
       async function loadList() {
@@ -1376,6 +1516,16 @@ LL.views = {};
         }
         if (event.target.closest('[data-conversation-older]')) {
           loadOlder();
+          return;
+        }
+        const zoom = event.target.closest('[data-chat-zoom]');
+        if (zoom) {
+          openLightbox(zoom.getAttribute('data-chat-zoom'));
+          return;
+        }
+        const file = event.target.closest('[data-chat-file]');
+        if (file) {
+          downloadAttachment(file);
         }
       });
 

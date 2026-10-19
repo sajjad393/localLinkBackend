@@ -22,6 +22,7 @@ package httpapi
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -45,16 +46,96 @@ type conversationSummary struct {
 }
 
 type conversationMessage struct {
-	ID             string `json:"id"`
-	SenderID       string `json:"sender_id"`
-	SenderName     string `json:"sender_name"`
-	SenderUsername string `json:"sender_username"`
-	RecipientID    string `json:"recipient_id,omitempty"`
-	Body           string `json:"body"`
-	CreatedAt      string `json:"created_at"`
-	Status         string `json:"status,omitempty"`
-	DeliveredAt    string `json:"delivered_at,omitempty"`
-	ServerSeq      int64  `json:"server_seq,omitempty"`
+	ID             string                   `json:"id"`
+	SenderID       string                   `json:"sender_id"`
+	SenderName     string                   `json:"sender_name"`
+	SenderUsername string                   `json:"sender_username"`
+	RecipientID    string                   `json:"recipient_id,omitempty"`
+	Body           string                   `json:"body"`
+	CreatedAt      string                   `json:"created_at"`
+	Status         string                   `json:"status,omitempty"`
+	DeliveredAt    string                   `json:"delivered_at,omitempty"`
+	ServerSeq      int64                    `json:"server_seq,omitempty"`
+	Attachments    []conversationAttachment `json:"attachments,omitempty"`
+}
+
+// conversationAttachment describes an attachment to the conversation console.
+// Every content URL it exposes goes through the owner-only, audit-logged
+// admin media endpoint — never the user-facing file routes, whose bearer
+// token the console does not hold.
+type conversationAttachment struct {
+	ID           string `json:"id"`
+	OriginalName string `json:"original_name"`
+	ContentType  string `json:"content_type"`
+	Size         int64  `json:"size"`
+	Width        int    `json:"width,omitempty"`
+	Height       int    `json:"height,omitempty"`
+	IsImage      bool   `json:"is_image"`
+	IsAudio      bool   `json:"is_audio"`
+	DownloadURL  string `json:"download_url"`
+	ThumbnailURL string `json:"thumbnail_url,omitempty"`
+}
+
+const adminConversationMediaPath = "/api/v1/admin/conversation-media?file_id="
+
+// adminConversationAttachments resolves ready attachments for one page of
+// messages. table/column name the join table for direct ('message_attachments',
+// 'message_id') or group ('group_message_attachments','group_message_id')
+// messages; both are internal constants, never request input.
+func (a *API) adminConversationAttachments(table, refColumn string, messageIDs []string) (map[string][]conversationAttachment, error) {
+	result := make(map[string][]conversationAttachment, len(messageIDs))
+	ids := uniqueNonEmptyIDs(messageIDs)
+	if len(ids) == 0 {
+		return result, nil
+	}
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := a.store.DB().Query(`SELECT ma.`+refColumn+`,f.id,f.original_name,f.content_type,f.size,COALESCE(f.width,0),COALESCE(f.height,0),f.is_image,COALESCE(f.thumbnail_path,'') FROM `+table+` ma JOIN files f ON f.id=ma.file_id WHERE ma.`+refColumn+` IN (`+placeholders+`) AND f.status='ready' ORDER BY ma.`+refColumn+`,ma.position,ma.file_id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var messageID string
+		var item conversationAttachment
+		var imageFlag int
+		var thumbnailPath string
+		if err := rows.Scan(&messageID, &item.ID, &item.OriginalName, &item.ContentType, &item.Size, &item.Width, &item.Height, &imageFlag, &thumbnailPath); err != nil {
+			return nil, err
+		}
+		item.IsImage = imageFlag != 0
+		item.IsAudio = strings.HasPrefix(strings.ToLower(item.ContentType), "audio/")
+		item.DownloadURL = adminConversationMediaPath + item.ID
+		if thumbnailPath != "" {
+			item.ThumbnailURL = adminConversationMediaPath + item.ID + "&thumb=1"
+		}
+		result[messageID] = append(result[messageID], item)
+	}
+	return result, rows.Err()
+}
+
+// fillConversationAttachments attaches media metadata to a page of direct or
+// group messages before the JSON leaves the server.
+func (a *API) fillConversationAttachments(groupThread bool, messages []conversationMessage) error {
+	ids := make([]string, 0, len(messages))
+	for _, m := range messages {
+		ids = append(ids, m.ID)
+	}
+	table, key := "message_attachments", "message_id"
+	if groupThread {
+		table, key = "group_message_attachments", "group_message_id"
+	}
+	byMessage, err := a.adminConversationAttachments(table, key, ids)
+	if err != nil {
+		return err
+	}
+	for i := range messages {
+		messages[i].Attachments = byMessage[messages[i].ID]
+	}
+	return nil
 }
 
 // deviceLabels resolves device ids to a display name and the account they
@@ -292,6 +373,10 @@ ORDER BY m.created_at DESC, m.id DESC LIMIT ?`, args...)
 	if hasMore {
 		out = out[:params.Limit]
 	}
+	if err := a.fillConversationAttachments(false, out); err != nil {
+		writeError(w, 500, "failed to read attachments")
+		return
+	}
 
 	// Recorded before the text leaves the server, whether or not any message
 	// matched: the operator opened a conversation, and that is the fact worth
@@ -391,6 +476,10 @@ ORDER BY gm.created_at DESC, gm.id DESC LIMIT ?`, args...)
 	if hasMore {
 		out = out[:params.Limit]
 	}
+	if err := a.fillConversationAttachments(true, out); err != nil {
+		writeError(w, 500, "failed to read attachments")
+		return
+	}
 
 	a.adminAudit(admin.ID, "admin_group_conversation_viewed", "group:"+groupID, fmt.Sprintf("messages=%d", len(out)))
 
@@ -414,4 +503,81 @@ ORDER BY gm.created_at DESC, gm.id DESC LIMIT ?`, args...)
 		resp.NextCursor = encodeListCursor("admin-group-conversation:"+groupID, last.CreatedAt, last.ID, true)
 	}
 	writeJSON(w, 200, resp)
+}
+
+// AdminConversationMedia streams one attachment's bytes for the owner who is
+// reviewing a conversation. The console fetches it with the admin bearer
+// header and renders the returned blob as an object URL, so this endpoint
+// deliberately stays header-only and never invites cookie or query-token
+// auth. Every fetch is recorded in the audit log, the same rule that governs
+// thread reads. '?thumb=1' serves the stored image thumbnail instead.
+func (a *API) AdminConversationMedia(w http.ResponseWriter, r *http.Request) {
+	admin, ok := a.requireAdminPermission(w, r, conversationPermission)
+	if !ok {
+		return
+	}
+	fileID := strings.TrimSpace(r.URL.Query().Get("file_id"))
+	if !validClientFileID(fileID) {
+		writeError(w, 400, "file_id is invalid")
+		return
+	}
+	wantThumb := r.URL.Query().Get("thumb") == "1"
+	var originalName, contentType, storagePath, thumbnailPath, status string
+	err := a.store.DB().QueryRow(
+		`SELECT COALESCE(original_name,''),COALESCE(content_type,''),storage_path,COALESCE(thumbnail_path,''),status FROM files WHERE id=?`,
+		fileID).Scan(&originalName, &contentType, &storagePath, &thumbnailPath, &status)
+	if err != nil || status != "ready" || storagePath == "" {
+		writeError(w, 404, "attachment not found")
+		return
+	}
+	servePath := storagePath
+	if wantThumb {
+		if thumbnailPath == "" {
+			writeError(w, 404, "thumbnail not found")
+			return
+		}
+		servePath = thumbnailPath
+		// createThumbnail writes '<id>-thumb.png' files.
+		contentType = "image/png"
+	}
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	a.adminAudit(admin.ID, "admin_conversation_media_viewed", fileID, fmt.Sprintf("thumb=%v name=%s", wantThumb, originalName))
+
+	header := w.Header()
+	header.Set("Content-Type", contentType)
+	header.Set("Cache-Control", "no-store")
+	header.Set("X-Content-Type-Options", "nosniff")
+	lower := strings.ToLower(contentType)
+	if wantThumb || strings.HasPrefix(lower, "audio/") || strings.HasPrefix(lower, "image/") || strings.HasPrefix(lower, "video/") {
+		header.Set("Content-Disposition", contentDispositionFilename("inline", originalName))
+	} else {
+		header.Set("Content-Disposition", contentDispositionFilename("attachment", originalName))
+	}
+	http.ServeFile(w, r, servePath)
+}
+
+// contentDispositionFilename builds an RFC 5987-safe attachment disposition so
+// arbitrary uploader-chosen filenames cannot smuggle header characters.
+func contentDispositionFilename(kind, name string) string {
+	clean := strings.Map(func(r rune) rune {
+		switch {
+		case r < 0x20 || r == '"' || r == '\\' || r == ';':
+			return '_'
+		case r > 126:
+			return -1
+		default:
+			return r
+		}
+	}, name)
+	if clean == "" {
+		clean = "download"
+	}
+	if !strings.EqualFold(clean, name) || strings.ContainsAny(clean, " ;") {
+		// Always pair the ASCII fallback with the exact UTF-8 form; quoting the
+		// UTF-8 form keeps headers parseable while preserving every character.
+		return kind + "; filename=\"" + clean + "\"; filename*=UTF-8''" + url.PathEscape(name)
+	}
+	return kind + "; filename=\"" + clean + "\""
 }

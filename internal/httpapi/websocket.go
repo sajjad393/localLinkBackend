@@ -136,6 +136,10 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		// Any frame — data or protocol keepalive — proves the device is live.
+		// Restamp presence + the online floor so quiet-but-healthy sockets
+		// never decay to "offline"/"0 server links" in the admin console.
+		a.noteDeviceFrame(deviceID)
 		switch opcode {
 		case ws.TextFrame:
 			var msg WSMessage

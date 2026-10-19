@@ -45,6 +45,8 @@ type API struct {
 	fileDownloadGate chan struct{}
 	presenceMu       sync.RWMutex
 	presence         map[string]DevicePresence
+	presenceDbMu     sync.Mutex
+	presenceDbTouch  map[string]time.Time
 	runtimeMu        sync.RWMutex
 	runtimeProvider  func() map[string]any
 	resMu            sync.Mutex
@@ -98,6 +100,7 @@ func NewWithError(s *store.Store) (*API, error) {
 		fileUploadGate:   make(chan struct{}, 8),
 		fileDownloadGate: make(chan struct{}, 16),
 		presence:         make(map[string]DevicePresence),
+		presenceDbTouch:  make(map[string]time.Time),
 	}
 	envName := strings.ToLower(strings.TrimSpace(getenv("LOCALLINK_ENV", "production")))
 	if envName != "test" && envName != "development" {
@@ -705,6 +708,37 @@ func presenceStatus(p DevicePresence) string {
 		return "yellow"
 	}
 	return "red"
+}
+
+// noteDeviceFrame keeps presence (and the devices.last_seen_at floor behind
+// it) alive as long as ANY websocket frame is flowing — including protocol
+// ping/pong, which carries no payload. AdminNetwork counts presence entries
+// with a 35s TTL; setPresence used to stamp UpdatedAt only at connect time
+// and on client presence_update frames, so a healthy but quiet socket decayed
+// to "0 server links" within a minute and the topology page drew live phones
+// as offline. Every frame now restamps UpdatedAt; the DB bump is throttled
+// to one write per 30s per device so an idle link costs nothing.
+func (a *API) noteDeviceFrame(deviceID string) {
+	if deviceID == "" {
+		return
+	}
+	now := time.Now().UTC()
+	a.presenceMu.Lock()
+	if p, ok := a.presence[deviceID]; ok {
+		p.UpdatedAt = now.Format(time.RFC3339Nano)
+		a.presence[deviceID] = p
+	}
+	a.presenceMu.Unlock()
+
+	a.presenceDbMu.Lock()
+	last := a.presenceDbTouch[deviceID]
+	if !last.IsZero() && now.Sub(last) < 30*time.Second {
+		a.presenceDbMu.Unlock()
+		return
+	}
+	a.presenceDbTouch[deviceID] = now
+	a.presenceDbMu.Unlock()
+	_, _ = a.store.DB().Exec(`UPDATE devices SET last_seen_at=? WHERE id=?`, now.Format(time.RFC3339Nano), deviceID)
 }
 
 func (a *API) setPresence(deviceID string, serverConnected, wifiDirectConnected bool, extras ...DevicePresence) (Device, bool) {

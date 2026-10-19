@@ -1,1 +1,15 @@
 node_modules/
+# Images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.bmp
+*.ico
+
+# Server runtime data (uploaded files, thumbnails, sqlite db)
+data/
+*.db
+*.db-wal
+*.db-shm

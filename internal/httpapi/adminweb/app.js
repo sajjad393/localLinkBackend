@@ -109,6 +109,21 @@
     renderRateLimitBanner();
   }
 
+  // Media endpoints need the bearer header, which <img>/<audio> elements
+  // cannot send (the console has no cookies). Views therefore download the
+  // bytes through this helper and render from same-tab blob: object URLs.
+  async function blob(path) {
+    const headers = { Accept: '*/*' };
+    if (state.token) headers.Authorization = 'Bearer ' + state.token;
+    const response = await fetch(path, { method: 'GET', headers });
+    if (response.status === 401) {
+      handleExpiry();
+      throw new Error('Your admin session expired. Sign in again.');
+    }
+    if (!response.ok) throw new Error(`Media request failed (${response.status})`);
+    return URL.createObjectURL(await response.blob());
+  }
+
   function rateLimited() {
     return state.rateLimitedUntil > Date.now();
   }
@@ -346,7 +361,7 @@
             ${ui.badge(`${network.mesh_available} mesh capable`, 'warning')}
           </div>
           <div class="chart-canvas-wrap" style="height:360px"><canvas id="topology-canvas"></canvas></div>
-          <p class="type-caption">Each ring node is a registered device. Solid nodes hold an active server session; faded nodes are offline. Lines show the server link only.</p>`;
+          <p class="type-caption">Devices are listed left and right of this server. A green ring and a solid line mean the device holds a live server session; a grey ring and a dashed line mean it is offline. Lines show the server link only.</p>`;
         modal.querySelector('[data-modal="close"]').addEventListener('click', () => { host.innerHTML = ''; });
         drawTopology($('topology-canvas'), list);
       })
@@ -361,72 +376,131 @@
     if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
     const width = canvas.parentElement.clientWidth;
-    const height = 360;
+
+    // Devices flank the server: the first half of the list goes down the left
+    // column, the rest down the right column. Online devices sort first so the
+    // live links sit nearest the top of each column.
+    const all = devices.slice().sort((a, b) => {
+      if ((a.online ? 1 : 0) !== (b.online ? 1 : 0)) return a.online ? -1 : 1;
+      return String(a.name || a.id || '').localeCompare(String(b.name || b.id || ''));
+    });
+    const leftCount = Math.ceil(all.length / 2);
+    const rightCount = all.length - leftCount;
+    const rows = Math.max(1, Math.max(leftCount, rightCount));
+
+    const nodeR = 16;
+    const serverR = 26;
+    const rowGap = 52;
+    const height = Math.max(360, rows * rowGap + 96);
     canvas.width = width * dpr;
     canvas.height = height * dpr;
     canvas.style.width = width + 'px';
     canvas.style.height = height + 'px';
+    canvas.parentElement.style.height = height + 'px';
     const ctx = canvas.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
     const cx = width / 2;
     const cy = height / 2;
-    const radius = Math.min(width, height) / 2 - 42;
-    const online = devices.filter((d) => d.online);
-    const offline = devices.filter((d) => !d.online);
-    const nodeColor = ui.token('primary', '#1e5bff');
+    const font = getComputedStyle(document.body).fontFamily;
+    const primary = ui.token('primary', '#1e5bff');
+    const success = ui.token('success', '#0f7b52');
     const muted = ui.token('text-tertiary', '#8b93a1');
+    const border = ui.token('border', '#e2e6ec');
     const surface = ui.token('surface', '#ffffff');
     const text = ui.token('text-secondary', '#5b6472');
+    const textStrong = ui.token('text-primary', '#111827');
 
-    // Server node
+    // hexToRgba is local and forgiving: it accepts '#rgb'/'#rrggbb' and falls
+    // back to the input string when the colour is not a hex literal at all.
+    const rgba = (hex, alpha) => {
+      let m = /^#?([0-9a-f]{3})$/i.exec(String(hex).trim());
+      if (m) m = [m[0], m[1].split('').map((c) => c + c).join('')];
+      else m = /^#?([0-9a-f]{6})$/i.exec(String(hex).trim());
+      if (!m) return String(hex);
+      const n = parseInt(m[1], 16);
+      return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+    };
+
+    const marginX = Math.max(150, Math.min(220, width * 0.24));
+    const leftX = marginX;
+    const rightX = width - marginX;
+    const yFor = (index, count) => cy + (index - (count - 1) / 2) * rowGap;
+
+    const drawLink = (x, y, onlineFlag) => {
+      const dx = x - cx;
+      const dy = y - cy;
+      const dist = Math.hypot(dx, dy) || 1;
+      const ux = dx / dist;
+      const uy = dy / dist;
+      ctx.beginPath();
+      ctx.moveTo(cx + ux * (serverR + 6), cy + uy * (serverR + 6));
+      ctx.lineTo(x - ux * (nodeR + 4), y - uy * (nodeR + 4));
+      ctx.strokeStyle = onlineFlag ? rgba(success, 0.55) : muted;
+      ctx.lineWidth = onlineFlag ? 2 : 1.4;
+      ctx.setLineDash(onlineFlag ? [] : [4, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    };
+
+    const drawDevice = (x, y, device, side) => {
+      drawLink(x, y, !!device.online);
+      // Visible ring: surface fill with a 3px coloured stroke, then a solid
+      // centre dot. Green when the device holds a live server session.
+      ctx.beginPath();
+      ctx.arc(x, y, nodeR, 0, Math.PI * 2);
+      ctx.fillStyle = surface;
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = device.online ? success : border;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = device.online ? success : muted;
+      ctx.fill();
+      // Label outside the ring: name, then the presence word beneath it.
+      const label = String(device.name || device.id || '').slice(0, 22) || 'device';
+      const lx = side === 'left' ? x - nodeR - 12 : x + nodeR + 12;
+      ctx.textAlign = side === 'left' ? 'right' : 'left';
+      ctx.textBaseline = 'middle';
+      ctx.font = '600 11px ' + font;
+      ctx.fillStyle = device.online ? textStrong : muted;
+      ctx.fillText(label, lx, y - 7);
+      ctx.font = '10px ' + font;
+      ctx.fillStyle = device.online ? success : muted;
+      ctx.fillText(device.online ? 'online' : 'offline', lx, y + 8);
+    };
+
+    all.forEach((device, index) => {
+      if (index < leftCount) drawDevice(leftX, yFor(index, leftCount), device, 'left');
+      else drawDevice(rightX, yFor(index - leftCount, rightCount), device, 'right');
+    });
+
+    // Server: halo ring plus a solid node, centred between the two columns.
     ctx.beginPath();
-    ctx.arc(cx, cy, 26, 0, Math.PI * 2);
-    ctx.fillStyle = ui.token('success', '#0f7b52');
+    ctx.arc(cx, cy, serverR + 8, 0, Math.PI * 2);
+    ctx.strokeStyle = rgba(primary, 0.28);
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, serverR, 0, Math.PI * 2);
+    ctx.fillStyle = primary;
     ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.font = '600 11px ' + getComputedStyle(document.body).fontFamily;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '600 11px ' + font;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('Server', cx, cy);
-
-    const all = online.concat(offline);
-    const step = all.length ? (Math.PI * 2) / all.length : 0;
-    all.forEach((device, index) => {
-      const angle = -Math.PI / 2 + step * index;
-      const x = cx + Math.cos(angle) * radius;
-      const y = cy + Math.sin(angle) * radius;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.lineTo(x, y);
-      ctx.strokeStyle = device.online ? ui.hexToRgba ? LL.charts.hexToRgba(nodeColor, 0.35) : nodeColor : ui.token('border', '#e2e6ec');
-      ctx.lineWidth = device.online ? 1.4 : 1;
-      ctx.setLineDash(device.online ? [] : [3, 3]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      ctx.beginPath();
-      ctx.arc(x, y, 9, 0, Math.PI * 2);
-      ctx.fillStyle = device.online ? nodeColor : surface;
-      ctx.fill();
-      ctx.strokeStyle = device.online ? nodeColor : muted;
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
-      ctx.fillStyle = text;
-      ctx.font = '10px ' + getComputedStyle(document.body).fontFamily;
-      const label = String(device.name || device.id || '').slice(0, 18);
-      const labelX = cx + Math.cos(angle) * (radius + 22);
-      ctx.textAlign = Math.abs(Math.cos(angle)) < 0.25 ? 'center' : (Math.cos(angle) > 0 ? 'left' : 'right');
-      ctx.fillText(label, labelX, y + 3);
-    });
+    ctx.fillStyle = muted;
+    ctx.font = '10px ' + font;
+    ctx.fillText('this server', cx, cy + serverR + 18);
 
     if (!all.length) {
       ctx.fillStyle = muted;
-      ctx.font = '12px ' + getComputedStyle(document.body).fontFamily;
+      ctx.font = '12px ' + font;
       ctx.textAlign = 'center';
-      ctx.fillText('No devices registered yet', cx, cy + radius * 0.6);
+      ctx.fillText('No devices registered yet', cx, cy + serverR + 40);
     }
   }
 
@@ -506,6 +580,7 @@
 
     const context = {
       api,
+      blob,
       state,
       session: state.session,
       role: state.session.role,
@@ -1039,7 +1114,7 @@
 
   // Expose a tiny surface for tests and for the views that need it.
   window.LL.app = {
-    api, can, toast, mountView, state, applyTheme, confirm: confirmDialog, openTopology,
+    api, blob, can, toast, mountView, state, applyTheme, confirm: confirmDialog, openTopology,
     rateLimited, renderRateLimitBanner, schedulePoll,
   };
 })();

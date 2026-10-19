@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -403,5 +405,215 @@ func TestAdminPrivacyPolicyStatesMessageAccess(t *testing.T) {
 	}
 	if policy.PrivateKeysExposed || !policy.AdministrativeActionsAudited {
 		t.Error("the rest of the policy should be unchanged")
+	}
+}
+
+// seedConversationAttachment records one audio file (no thumbnail) attached to
+// the seeded direct message m2, plus one image file with a thumbnail. It
+// returns the on-disk payload bytes of the audio file.
+func seedConversationAttachment(t *testing.T, api *API, now time.Time) []byte {
+	t.Helper()
+	dir := t.TempDir()
+	audioPath := filepath.Join(dir, "voice.ogg")
+	audioPayload := []byte("OggS-fake-audio-payload")
+	if err := os.WriteFile(audioPath, audioPayload, 0o600); err != nil {
+		t.Fatalf("write audio fixture: %v", err)
+	}
+	imgPath := filepath.Join(dir, "photo.png")
+	imgPayload := []byte("\x89PNG-fake-image")
+	if err := os.WriteFile(imgPath, imgPayload, 0o600); err != nil {
+		t.Fatalf("write image fixture: %v", err)
+	}
+	thumbPath := filepath.Join(dir, "f-img-thumb.png")
+	thumbPayload := []byte("\x89PNG-fake-thumb")
+	if err := os.WriteFile(thumbPath, thumbPayload, 0o600); err != nil {
+		t.Fatalf("write thumb fixture: %v", err)
+	}
+	mustExec := func(q string, args ...interface{}) {
+		if _, err := api.store.DB().Exec(q, args...); err != nil {
+			t.Fatalf("seed attachment row: %v", err)
+		}
+	}
+	stamp := now.Format(time.RFC3339Nano)
+	mustExec(`INSERT INTO files(id,owner_id,original_name,content_type,size,sha256,storage_path,thumbnail_path,width,height,is_image,created_at,status,storage_size,thumbnail_storage_size) VALUES('f-audio','device-a','voice note.ogg','audio/ogg',?,'sha-a',?,'',0,0,0,?,'ready',?,0)`,
+		len(audioPayload), audioPath, stamp, len(audioPayload))
+	mustExec(`INSERT INTO files(id,owner_id,original_name,content_type,size,sha256,storage_path,thumbnail_path,width,height,is_image,created_at,status,storage_size,thumbnail_storage_size) VALUES('f-img','device-b','photo.png','image/png',?,'sha-b',?,?,640,480,1,?,'ready',?,?)`,
+		len(imgPayload), imgPath, thumbPath, stamp, len(imgPayload), len(thumbPayload))
+	mustExec(`INSERT INTO message_attachments(message_id,file_id,position) VALUES('m2','f-audio',0)`)
+	mustExec(`INSERT INTO message_attachments(message_id,file_id,position) VALUES('m2','f-img',1)`)
+	return audioPayload
+}
+
+func TestAdminConversationReturnsAttachments(t *testing.T) {
+	api, cleanup := setupAdminTest(t)
+	defer cleanup()
+	seedConversation(t, api)
+	seedConversationAttachment(t, api, time.Now())
+	owner := adminAccountWithRole(t, api, "owner")
+
+	res := adminGet(t, api.AdminConversation, "/api/v1/admin/conversation?user_a=device-a&user_b=device-b", owner)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body.String())
+	}
+	var payload struct {
+		Messages []struct {
+			ID          string `json:"id"`
+			Attachments []struct {
+				ID           string `json:"id"`
+				OriginalName string `json:"original_name"`
+				ContentType  string `json:"content_type"`
+				Size         int64  `json:"size"`
+				IsImage      bool   `json:"is_image"`
+				IsAudio      bool   `json:"is_audio"`
+				DownloadURL  string `json:"download_url"`
+				ThumbnailURL string `json:"thumbnail_url"`
+			} `json:"attachments"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var m2 []struct {
+		ID, OriginalName, ContentType, DownloadURL, ThumbnailURL string
+		Size                                                     int64
+		IsImage, IsAudio                                         bool
+	}
+	for _, m := range payload.Messages {
+		if m.ID == "m2" {
+			for _, a := range m.Attachments {
+				m2 = append(m2, struct {
+					ID, OriginalName, ContentType, DownloadURL, ThumbnailURL string
+					Size                                                     int64
+					IsImage, IsAudio                                         bool
+				}{a.ID, a.OriginalName, a.ContentType, a.DownloadURL, a.ThumbnailURL, a.Size, a.IsImage, a.IsAudio})
+			}
+		}
+	}
+	if len(m2) != 2 {
+		t.Fatalf("m2 attachments = %d, want 2 (%s)", len(m2), res.Body.String())
+	}
+	audio, img := m2[0], m2[1]
+	if audio.ID != "f-audio" || !audio.IsAudio || audio.IsImage {
+		t.Errorf("audio attachment = %+v", audio)
+	}
+	if audio.OriginalName != "voice note.ogg" || !strings.Contains(audio.DownloadURL, "/api/v1/admin/conversation-media?file_id=f-audio") {
+		t.Errorf("audio download metadata wrong: %+v", audio)
+	}
+	if audio.ThumbnailURL != "" {
+		t.Errorf("audio has no thumbnail; thumbnail_url = %q", audio.ThumbnailURL)
+	}
+	if !img.IsImage || img.ThumbnailURL == "" || !strings.Contains(img.ThumbnailURL, "file_id=f-img&thumb=1") {
+		t.Errorf("image attachment missing thumbnail_url: %+v", img)
+	}
+}
+
+func TestAdminConversationMediaEndpoint(t *testing.T) {
+	api, cleanup := setupAdminTest(t)
+	defer cleanup()
+	seedConversation(t, api)
+	payload := seedConversationAttachment(t, api, time.Now())
+	owner := adminAccountWithRole(t, api, "owner")
+	base := "/api/v1/admin/conversation-media?file_id="
+
+	if res := adminGet(t, api.AdminConversationMedia, base+"f-audio", adminAccountWithRole(t, api, "security")); res.Code != http.StatusForbidden {
+		t.Errorf("non-owner role: status = %d, want 403", res.Code)
+	}
+	{ // no credentials at all
+		req := httptest.NewRequest(http.MethodGet, base+"f-audio", nil)
+		res := httptest.NewRecorder()
+		api.AdminConversationMedia(res, req)
+		if res.Code == http.StatusOK {
+			t.Error("unauthenticated request must not stream media")
+		}
+	}
+	res := adminGet(t, api.AdminConversationMedia, base+"f-audio", owner)
+	if res.Code != http.StatusOK {
+		t.Fatalf("audio fetch: status = %d: %s", res.Code, res.Body.String())
+	}
+	if res.Body.String() != string(payload) {
+		t.Errorf("streamed bytes mismatch: got %q", res.Body.String())
+	}
+	if ct := res.Header().Get("Content-Type"); ct != "audio/ogg" {
+		t.Errorf("Content-Type = %q, want audio/ogg", ct)
+	}
+	if cd := res.Header().Get("Content-Disposition"); !strings.Contains(cd, "inline") || !strings.Contains(cd, "voice") {
+		t.Errorf("audio should be inline-playable, disposition = %q", cd)
+	}
+	if res := adminGet(t, api.AdminConversationMedia, base+"f-audio&thumb=1", owner); res.Code != http.StatusNotFound {
+		t.Errorf("thumb=1 on file without thumbnail: status = %d, want 404", res.Code)
+	}
+	img := adminGet(t, api.AdminConversationMedia, base+"f-img&thumb=1", owner)
+	if img.Code != http.StatusOK || img.Body.String() != string("\x89PNG-fake-thumb") {
+		t.Errorf("thumbnail fetch: status = %d body = %q", img.Code, img.Body.String())
+	}
+	if ct := img.Header().Get("Content-Type"); ct != "image/png" {
+		t.Errorf("thumbnail Content-Type = %q, want image/png", ct)
+	}
+	if res := adminGet(t, api.AdminConversationMedia, base+"../etc/passwd", owner); res.Code != http.StatusBadRequest {
+		t.Errorf("malicious file id: status = %d, want 400", res.Code)
+	}
+	if res := adminGet(t, api.AdminConversationMedia, base+"nope", owner); res.Code != http.StatusNotFound {
+		t.Errorf("unknown file id: status = %d, want 404", res.Code)
+	}
+	var auditCount int
+	if err := api.store.DB().QueryRow(`SELECT COUNT(*) FROM admin_audit WHERE action='admin_conversation_media_viewed'`).Scan(&auditCount); err != nil {
+		t.Fatalf("count audit rows: %v", err)
+	}
+	if auditCount < 2 {
+		t.Errorf("media views audited %d times, want >= 2", auditCount)
+	}
+}
+
+func TestNoteDeviceFrameKeepsPresenceAndLastSeenFresh(t *testing.T) {
+	api, cleanup := setupAdminTest(t)
+	defer cleanup()
+	seedConversation(t, api)
+	stale := time.Now().Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := api.store.DB().Exec(`UPDATE devices SET last_seen_at=? WHERE id='device-a'`, stale); err != nil {
+		t.Fatalf("back-date last_seen: %v", err)
+	}
+	func() {
+		api.presenceMu.Lock()
+		defer api.presenceMu.Unlock()
+		if api.presence == nil {
+			api.presence = map[string]DevicePresence{}
+		}
+		api.presence["device-a"] = DevicePresence{ServerConnected: true, UpdatedAt: stale}
+	}()
+
+	api.noteDeviceFrame("device-a")
+	api.noteDeviceFrame("device-a") // second call exercises the throttle path
+
+	func() {
+		api.presenceMu.RLock()
+		defer api.presenceMu.RUnlock()
+		if got := api.presence["device-a"].UpdatedAt; got <= stale {
+			t.Errorf("presence UpdatedAt = %q, want > %q", got, stale)
+		}
+	}()
+	var lastSeen string
+	if err := api.store.DB().QueryRow(`SELECT last_seen_at FROM devices WHERE id='device-a'`).Scan(&lastSeen); err != nil {
+		t.Fatalf("read last_seen_at: %v", err)
+	}
+	if lastSeen <= stale {
+		t.Errorf("devices.last_seen_at = %q, want > %q", lastSeen, stale)
+	}
+	owner := adminAccountWithRole(t, api, "owner")
+	res := adminGet(t, api.AdminNetwork, "/api/v1/admin/network", owner)
+	if res.Code != http.StatusOK {
+		t.Fatalf("network: status = %d", res.Code)
+	}
+	var net struct {
+		ServerConnected int `json:"server_connected"`
+		OnlineDevices   int `json:"online_devices"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &net); err != nil {
+		t.Fatalf("decode network: %v", err)
+	}
+	if net.ServerConnected < 1 {
+		t.Errorf("server_connected = %d after WS frames, want >= 1", net.ServerConnected)
+	}
+	if net.OnlineDevices < 1 {
+		t.Errorf("online_devices = %d after WS frames, want >= 1", net.OnlineDevices)
 	}
 }

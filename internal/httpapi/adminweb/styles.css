@@ -883,3 +883,142 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
   .skeleton { background: var(--surface-muted); }
 }
+
+/* -------------------------------------------------- conversation bubbles
+   Clone of the phone app's MessageBubble: neutral surfaces, 82% max width,
+   the corner that tightens on the sender side, 12-hour time and ✓/✓✓ ticks. */
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0;
+}
+.chat-row { display: flex; }
+.chat-row.out { justify-content: flex-end; }
+.chat-bubble {
+  max-width: min(82%, 620px);
+  min-width: 84px;
+  padding: var(--space-sm) var(--space-md) var(--space-xs);
+  border: 1px solid var(--border);
+  border-radius: 18px 18px 18px 6px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+}
+.chat-bubble.out {
+  background: var(--surface-muted);
+  border-radius: 18px 18px 6px 18px;
+}
+.chat-author {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--info);
+  margin-bottom: 2px;
+}
+.chat-user { font-weight: 400; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 11px; }
+.chat-body {
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.chat-meta {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.chat-ticks { letter-spacing: -2.5px; padding-right: 2px; font-size: 11px; color: var(--text-tertiary); }
+.chat-ticks.read { color: var(--info); }
+
+.chat-media { margin-top: var(--space-sm); max-width: 300px; }
+.chat-media.is-loading { min-height: 44px; border-radius: 12px; background: var(--hover); animation: pulse 1.4s ease-in-out infinite; }
+.chat-img-btn { display: block; padding: 0; border: 0; background: transparent; cursor: zoom-in; max-width: 100%; }
+.chat-img {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+.chat-media audio { display: block; width: 260px; max-width: 100%; height: 38px; }
+.chat-att-name {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+.chat-file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  max-width: 300px;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.chat-file:hover { background: var(--hover); }
+.chat-file:disabled { opacity: 0.55; cursor: wait; }
+.chat-file .icon { flex: none; color: var(--text-secondary); }
+.chat-file-meta { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.chat-file-meta strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-file-meta span { font-size: 11px; color: var(--text-tertiary); }
+.chat-media-missing {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  max-width: 300px;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+.chat-media-missing .icon { flex: none; margin-top: 1px; color: var(--warning); }
+
+.chat-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4vh 4vw;
+  background: rgba(8, 11, 16, 0.78);
+  cursor: zoom-out;
+}
+.chat-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.chat-lightbox .chat-media-missing { background: var(--surface); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+[data-theme="dark"] .chat-bubble.out { background: #222a36; }
