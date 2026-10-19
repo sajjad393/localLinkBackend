@@ -156,10 +156,14 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				presence := DevicePresence{ServerConnected: true, WiFiDirectConnected: msg.WiFiDirectConnected, LanAvailable: msg.LanAvailable, MeshAvailable: msg.MeshAvailable, SigningPublicKey: msg.SigningPublicKey, WiFiControlCapable: msg.WiFiControlCapable, ManagedDevice: msg.ManagedDevice, WiFiEnabled: msg.WiFiEnabled}
-				d, changed := a.setPresence(deviceID, true, msg.WiFiDirectConnected, presence)
-				if changed {
-					a.broadcastPresence(deviceID, d)
-				}
+				d, _ := a.setPresence(deviceID, true, msg.WiFiDirectConnected, presence)
+				// Relay presence to peers on EVERY publish, not only on changes.
+				// Phones rely on the forwarded frame to stamp the sender "alive"
+				// locally (60s liveness window); unchanged-state publishes were
+				// swallowed by the change-gate, so both sides showed mutual
+				// Offline ~60s after the last real change while both stayed
+				// connected. Floor traffic: one ~200B frame per publish cycle.
+				a.broadcastPresence(deviceID, d)
 				continue
 			case "call_invite":
 				if strings.TrimSpace(msg.TransportMode) != "offline_mesh" {
