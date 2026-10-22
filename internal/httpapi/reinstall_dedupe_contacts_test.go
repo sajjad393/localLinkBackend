@@ -188,3 +188,26 @@ func TestAccountContactsCRUDIdempotentAndRestored(t *testing.T) {
 		t.Fatalf("contacts after removal: %+v", payload.Contacts)
 	}
 }
+
+// Bundle 88c: the app sends hardware_fp on register as well as login. The
+// register endpoint must accept the field (decoder rejects unknown keys) and
+// persist it so a later reinstall can re-bind.
+func TestRegisterAccountAcceptsHardwareFingerprint(t *testing.T) {
+	st, a := newTestAPI(t)
+	defer st.Close()
+
+	res := doJSON(t, a.RegisterAccount, http.MethodPost, "/api/v1/auth/register", map[string]any{
+		"username": "regfptest", "password": pw, "device_id": "fp-phone", "device_name": "My Android Phone (fp)", "platform": "android",
+		"hardware_fp": "fp-REGISTER-1",
+	})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("register with hardware_fp: %d %s", res.Code, res.Body.String())
+	}
+	var fp string
+	if err := a.store.DB().QueryRow(`SELECT hardware_fp FROM devices WHERE id='fp-phone'`).Scan(&fp); err != nil {
+		t.Fatal(err)
+	}
+	if fp != "fp-REGISTER-1" {
+		t.Fatalf("hardware_fp not persisted on register path, got %q", fp)
+	}
+}

@@ -55,10 +55,15 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 		DeviceName  string `json:"device_name"`
 		Platform    string `json:"platform"`
 		PairingCode string `json:"pairing_code"`
+		HardwareFP  string `json:"hardware_fp"`
 	}
 	if err := decodeJSON(r, &in, 12<<10); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	hardwareFP := strings.TrimSpace(in.HardwareFP)
+	if len(hardwareFP) > 128 || hasControlChars(hardwareFP) {
+		hardwareFP = ""
 	}
 	username, password, deviceID, deviceName, platform, pairingCode, ok := normalizeAuthInput(in.Username, in.Password, in.DeviceID, in.DeviceName, in.Platform, in.PairingCode)
 	if !ok {
@@ -106,8 +111,8 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if _, err = tx.Exec(`INSERT INTO devices(id,name,platform,created_at,last_seen_at,token_hash,user_id) VALUES(?,?,?,?,?,?,?)`,
-		deviceID, deviceName, platform, nowText, nowText, tokenHash(token), userID); err != nil {
+	if _, err = tx.Exec(`INSERT INTO devices(id,name,platform,created_at,last_seen_at,token_hash,user_id,hardware_fp) VALUES(?,?,?,?,?,?,?,?)`,
+		deviceID, deviceName, platform, nowText, nowText, tokenHash(token), userID, hardwareFP); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			writeError(w, http.StatusConflict, "device id is already registered")
 		} else {
