@@ -17,6 +17,16 @@ type AccountContact struct {
 }
 
 func (a *API) accountContactsForUser(userID string) ([]AccountContact, error) {
+	// Contact relationship model is MUTUAL: when A adds B, B sees A too.
+	// Rows written before the reciprocal-add change are one-way; backfill the
+	// missing reverse row on read so every legacy pair converges (idempotent
+	// INSERT OR IGNORE keyed by the (user_id, contact_user_id) primary key).
+	if _, err := a.store.DB().Exec(`INSERT OR IGNORE INTO account_contacts(user_id,contact_user_id,added_at)
+		SELECT contact_user_id,user_id,added_at FROM account_contacts outc
+		WHERE outc.contact_user_id=? AND NOT EXISTS(
+			SELECT 1 FROM account_contacts inn WHERE inn.user_id=outc.contact_user_id AND inn.contact_user_id=outc.user_id)`, userID); err != nil {
+		return nil, err
+	}
 	rows, err := a.store.DB().Query(`
 		SELECT c.contact_user_id,
 			COALESCE((SELECT d.id FROM devices d WHERE d.user_id=c.contact_user_id AND COALESCE(d.status,'active')='active' ORDER BY d.last_seen_at DESC LIMIT 1),''),
@@ -77,7 +87,16 @@ func (a *API) AddAccountContact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	if _, err := a.store.DB().Exec(`INSERT OR IGNORE INTO account_contacts(user_id,contact_user_id,added_at) VALUES(?,?,?)`, userID, contactID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	// Mutual contacts: record the relationship in BOTH directions so the
+	// added user sees the adder in their People/contacts list and their
+	// fresh-install restore returns the pair. INSERT OR IGNORE keeps repeated
+	// adds idempotent (no duplicate rows, no 409 churn).
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := a.store.DB().Exec(`INSERT OR IGNORE INTO account_contacts(user_id,contact_user_id,added_at) VALUES(?,?,?)`, userID, contactID, now); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to add contact")
+		return
+	}
+	if _, err := a.store.DB().Exec(`INSERT OR IGNORE INTO account_contacts(user_id,contact_user_id,added_at) VALUES(?,?,?)`, contactID, userID, now); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to add contact")
 		return
 	}
@@ -96,7 +115,10 @@ func (a *API) RemoveAccountContact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid contact")
 		return
 	}
-	if _, err := a.store.DB().Exec(`DELETE FROM account_contacts WHERE user_id=? AND contact_user_id=?`, userID, contactID); err != nil {
+	// Mutual removal mirrors mutual add: deleting a contact ends the
+	// relationship for both sides, otherwise the removed user would keep
+	// seeing (and could keep contacting) the deleter.
+	if _, err := a.store.DB().Exec(`DELETE FROM account_contacts WHERE (user_id=? AND contact_user_id=?) OR (user_id=? AND contact_user_id=?)`, userID, contactID, contactID, userID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to remove contact")
 		return
 	}

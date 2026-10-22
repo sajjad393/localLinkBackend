@@ -177,7 +177,11 @@ func (a *API) GroupMembers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "device is not a group member")
 		return
 	}
-	rows, err := a.store.DB().Query(`SELECT gm.group_id,gm.device_id,gm.role,gm.joined_at,d.name FROM group_members gm JOIN devices d ON d.id=gm.device_id WHERE gm.group_id=? ORDER BY gm.role DESC,d.name COLLATE NOCASE`, gid)
+	// Member display name must be the account profile nickname, not the
+	// device label ("My Android Phone (xxxx)"): join through devices -> users
+	// -> profiles and only fall back to the device name when no profile
+	// nickname exists at all.
+	rows, err := a.store.DB().Query(`SELECT gm.group_id,gm.device_id,gm.role,gm.joined_at,COALESCE(NULLIF(TRIM(p.display_name),''),d.name) FROM group_members gm JOIN devices d ON d.id=gm.device_id LEFT JOIN profiles p ON p.user_id=d.user_id WHERE gm.group_id=? ORDER BY gm.role DESC,COALESCE(NULLIF(TRIM(p.display_name),''),d.name) COLLATE NOCASE`, gid)
 	if err != nil {
 		writeError(w, 500, "failed to list members")
 		return

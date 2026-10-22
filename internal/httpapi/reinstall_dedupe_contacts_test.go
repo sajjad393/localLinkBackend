@@ -211,3 +211,166 @@ func TestRegisterAccountAcceptsHardwareFingerprint(t *testing.T) {
 		t.Fatalf("hardware_fp not persisted on register path, got %q", fp)
 	}
 }
+
+func TestAccountContactsMutualLifecycle(t *testing.T) {
+	st, a := newTestAPI(t)
+	defer st.Close()
+
+	authA := registerUser(t, a, "mutual_a", "ma-phone")
+	authB := registerUser(t, a, "mutual_b", "mb-phone")
+	ha := map[string]string{"Authorization": "Bearer " + authA.Token, "X-Device-ID": "ma-phone"}
+	hb := map[string]string{"Authorization": "Bearer " + authB.Token, "X-Device-ID": "mb-phone"}
+
+	// A adds B: B must see A WITHOUT adding A back (mutual model), and the
+	// reverse add must be harmless (no duplicates, still 200).
+	res := doJSON(t, a.AddAccountContact, http.MethodPost, "/api/v1/account/contacts", map[string]any{"user_id": authB.Account.ID}, ha)
+	if res.Code != http.StatusOK {
+		t.Fatalf("A adds B: %d %s", res.Code, res.Body.String())
+	}
+	listB := doJSON(t, a.ListAccountContacts, http.MethodGet, "/api/v1/account/contacts", nil, hb)
+	if listB.Code != http.StatusOK {
+		t.Fatalf("list B: %d %s", listB.Code, listB.Body.String())
+	}
+	var pb struct {
+		Contacts []AccountContact `json:"contacts"`
+	}
+	if err := json.Unmarshal(listB.Body.Bytes(), &pb); err != nil {
+		t.Fatal(err)
+	}
+	if len(pb.Contacts) != 1 || pb.Contacts[0].UserID != authA.Account.ID {
+		t.Fatalf("B should see A as contact without re-adding: %+v", pb.Contacts)
+	}
+	if pb.Contacts[0].DeviceID == "" {
+		t.Fatalf("reverse contact device id unresolved: %+v", pb.Contacts[0])
+	}
+
+	// The reciprocal add (e.g. B's client retrying or an older version) is
+	// idempotent: still exactly one contact on each side.
+	res = doJSON(t, a.AddAccountContact, http.MethodPost, "/api/v1/account/contacts", map[string]any{"user_id": authA.Account.ID}, hb)
+	if res.Code != http.StatusOK {
+		t.Fatalf("B reverse-adds A: %d %s", res.Code, res.Body.String())
+	}
+	listA := doJSON(t, a.ListAccountContacts, http.MethodGet, "/api/v1/account/contacts", nil, ha)
+	listB = doJSON(t, a.ListAccountContacts, http.MethodGet, "/api/v1/account/contacts", nil, hb)
+	var pa struct {
+		Contacts []AccountContact `json:"contacts"`
+	}
+	pb.Contacts = nil
+	if err := json.Unmarshal(listA.Body.Bytes(), &pa); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(listB.Body.Bytes(), &pb); err != nil {
+		t.Fatal(err)
+	}
+	if len(pa.Contacts) != 1 || len(pb.Contacts) != 1 {
+		t.Fatalf("reverse add must not duplicate: A=%+v B=%+v", pa.Contacts, pb.Contacts)
+	}
+
+	// Removal ends the relationship for BOTH sides.
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/account/contacts/"+authA.Account.ID, nil)
+	req.SetPathValue("user_id", authA.Account.ID)
+	for k, v := range hb {
+		req.Header.Set(k, v)
+	}
+	del := httptest.NewRecorder()
+	a.RemoveAccountContact(del, req)
+	if del.Code != http.StatusOK {
+		t.Fatalf("B removes A: %d %s", del.Code, del.Body.String())
+	}
+	listA = doJSON(t, a.ListAccountContacts, http.MethodGet, "/api/v1/account/contacts", nil, ha)
+	pa.Contacts = nil
+	if err := json.Unmarshal(listA.Body.Bytes(), &pa); err != nil {
+		t.Fatal(err)
+	}
+	if len(pa.Contacts) != 0 {
+		t.Fatalf("mutual removal must clear both lists, A still has: %+v", pa.Contacts)
+	}
+}
+
+func TestAccountContactsListHealsLegacyOneWayRows(t *testing.T) {
+	st, a := newTestAPI(t)
+	defer st.Close()
+
+	authC := registerUser(t, a, "legacy_c", "lc-phone")
+	authD := registerUser(t, a, "legacy_d", "ld-phone")
+	hd := map[string]string{"Authorization": "Bearer " + authD.Token, "X-Device-ID": "ld-phone"}
+
+	// Simulate a contact pair written before reciprocal adds: only C->D exists.
+	if _, err := st.DB().Exec(`INSERT INTO account_contacts(user_id,contact_user_id,added_at) VALUES(?,?,?)`, authC.Account.ID, authD.Account.ID, "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	// Listing must backfill the missing reverse row and THEN return it, so a
+	// legacy pair becomes visible to both accounts without any client action.
+	list := doJSON(t, a.ListAccountContacts, http.MethodGet, "/api/v1/account/contacts", nil, hd)
+	if list.Code != http.StatusOK {
+		t.Fatalf("list D: %d %s", list.Code, list.Body.String())
+	}
+	var payload struct {
+		Contacts []AccountContact `json:"contacts"`
+	}
+	if err := json.Unmarshal(list.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Contacts) != 1 || payload.Contacts[0].UserID != authC.Account.ID {
+		t.Fatalf("legacy one-way row must surface for D: %+v", payload.Contacts)
+	}
+	var reverse int
+	if err := st.DB().QueryRow(`SELECT COUNT(1) FROM account_contacts WHERE user_id=? AND contact_user_id=?`, authD.Account.ID, authC.Account.ID).Scan(&reverse); err != nil {
+		t.Fatal(err)
+	}
+	if reverse != 1 {
+		t.Fatalf("self-heal must persist the reverse row, found %d", reverse)
+	}
+}
+
+func TestGroupMembersExposeProfileNicknameNotDeviceLabel(t *testing.T) {
+	st, a := newTestAPI(t)
+	defer st.Close()
+
+	authA := registerUser(t, a, "group_a", "ga-phone")
+	authB := registerUser(t, a, "group_b", "gb-phone")
+	ha := map[string]string{"Authorization": "Bearer " + authA.Token, "X-Device-ID": "ga-phone"}
+	hb := map[string]string{"Authorization": "Bearer " + authB.Token, "X-Device-ID": "gb-phone"}
+
+	// B sets a profile nickname.
+	upd := doJSON(t, a.UpdateProfile, http.MethodPut, "/api/v1/profile",
+		map[string]any{"display_name": "Sana Oz", "username": "group_b"}, hb)
+	if upd.Code != http.StatusOK && upd.Code != http.StatusCreated {
+		t.Fatalf("update profile: %d %s", upd.Code, upd.Body.String())
+	}
+
+	// A creates a group with B's device, then lists members as both members.
+	create := doJSON(t, a.CreateGroup, http.MethodPost, "/api/v1/groups",
+		map[string]any{"name": "pair chat", "member_ids": []string{"gb-phone"}}, ha)
+	if create.Code != http.StatusOK && create.Code != http.StatusCreated {
+		t.Fatalf("create group: %d %s", create.Code, create.Body.String())
+	}
+	var group struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &group); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []map[string]string{ha, hb} {
+		members := doJSON(t, a.GroupMembers, http.MethodGet, "/api/v1/groups/members?group_id="+group.ID, nil, h)
+		if members.Code != http.StatusOK {
+			t.Fatalf("list members: %d %s", members.Code, members.Body.String())
+		}
+		var rows []map[string]any
+		if err := json.Unmarshal(members.Body.Bytes(), &rows); err != nil {
+			t.Fatal(err)
+		}
+		var found bool
+		for _, row := range rows {
+			if row["device_id"] == "gb-phone" {
+				found = true
+				if name := row["name"]; name != "Sana Oz" {
+					t.Fatalf("member name must be profile nickname, got %v", name)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("member rows missing gb-phone: %+v", rows)
+		}
+	}
+}
