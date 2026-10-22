@@ -207,7 +207,8 @@ CREATE TABLE IF NOT EXISTS devices (
     revoked_at TEXT,
     identity_public_key TEXT,
     identity_key_version INTEGER NOT NULL DEFAULT 1,
-    user_id TEXT REFERENCES users(id) ON DELETE SET NULL
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    hardware_fp TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
 
@@ -505,6 +506,24 @@ CREATE INDEX IF NOT EXISTS idx_group_message_attachments_file ON group_message_a
 		return err
 	}
 	if err := s.ensureColumn("devices", "user_id", "TEXT"); err != nil {
+		return err
+	}
+	// Stable hardware fingerprint lets a reinstalled app with a cleared device
+	// id re-bind to its existing device row instead of creating a duplicate.
+	if err := s.ensureColumn("devices", "hardware_fp", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_devices_hardware_fp ON devices(hardware_fp) WHERE hardware_fp <> ''`); err != nil {
+		return err
+	}
+	// Server-backed contact list so contacts survive app reinstall/login on a
+	// fresh device (they were previously local-only and lost on uninstall).
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS account_contacts (
+		user_id TEXT NOT NULL,
+		contact_user_id TEXT NOT NULL,
+		added_at TEXT NOT NULL,
+		PRIMARY KEY(user_id, contact_user_id)
+	)`); err != nil {
 		return err
 	}
 	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS users (

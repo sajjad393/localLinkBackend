@@ -38,6 +38,7 @@ type AccountRestoreData struct {
 	GroupMessages []GroupMessage `json:"group_messages,omitempty"`
 	Calls         []CallRecord   `json:"calls,omitempty"`
 	Files         []Attachment   `json:"files,omitempty"`
+	Contacts      []AccountContact `json:"contacts,omitempty"`
 	NextCursor    string         `json:"next_cursor,omitempty"`
 	HasMore       bool           `json:"has_more"`
 }
@@ -125,6 +126,7 @@ func (a *API) GetAccountRestoreManifest(w http.ResponseWriter, r *http.Request) 
 		"messages":       `SELECT COUNT(*) FROM messages m WHERE EXISTS (SELECT 1 FROM devices d WHERE d.user_id=? AND (d.id=m.sender_id OR d.id=m.recipient_id))`,
 		"group_messages": `SELECT COUNT(*) FROM group_messages gm WHERE EXISTS (SELECT 1 FROM group_members gmem JOIN devices d ON d.id=gmem.device_id WHERE gmem.group_id=gm.group_id AND d.user_id=?)`,
 		"calls":          `SELECT COUNT(*) FROM calls c WHERE EXISTS (SELECT 1 FROM devices d WHERE d.user_id=? AND (d.id=c.caller_id OR d.id=c.callee_id))`,
+		"contacts":       `SELECT COUNT(*) FROM account_contacts WHERE user_id=?`,
 		"files":          `SELECT COUNT(DISTINCT f.id) FROM files f WHERE f.status='ready' AND (EXISTS (SELECT 1 FROM devices d WHERE d.user_id=? AND d.id=f.owner_id) OR EXISTS (SELECT 1 FROM message_attachments ma JOIN messages m ON m.id=ma.message_id JOIN devices d ON d.user_id=? AND (d.id=m.sender_id OR d.id=m.recipient_id) WHERE ma.file_id=f.id) OR EXISTS (SELECT 1 FROM group_message_attachments ga JOIN group_messages gm ON gm.id=ga.group_message_id JOIN group_members gmem ON gmem.group_id=gm.group_id JOIN devices d ON d.id=gmem.device_id AND d.user_id=? WHERE ga.file_id=f.id))`,
 	}
 	for key, query := range queries {
@@ -175,7 +177,7 @@ func (a *API) GetAccountRestoreData(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	resp := AccountRestoreData{Version: 1, Scope: scope, Messages: []Message{}, GroupMessages: []GroupMessage{}, Calls: []CallRecord{}, Files: []Attachment{}, Groups: []Group{}, GroupMembers: []GroupMember{}, Devices: []Device{}}
+	resp := AccountRestoreData{Version: 1, Scope: scope, Messages: []Message{}, GroupMessages: []GroupMessage{}, Calls: []CallRecord{}, Files: []Attachment{}, Groups: []Group{}, GroupMembers: []GroupMember{}, Devices: []Device{}, Contacts: []AccountContact{}}
 	switch scope {
 	case "metadata":
 		if err := a.fillRestoreMetadata(&resp, userID); err != nil {
@@ -224,11 +226,16 @@ func (a *API) fillRestoreMetadata(resp *AccountRestoreData, userID string) error
 	if err != nil {
 		return err
 	}
+	contacts, err := a.accountContactsForUser(userID)
+	if err != nil {
+		return err
+	}
 	resp.Account = &account
 	resp.Profile = &profile
 	resp.Devices = devices
 	resp.Groups = groups
 	resp.GroupMembers = members
+	resp.Contacts = contacts
 	return nil
 }
 

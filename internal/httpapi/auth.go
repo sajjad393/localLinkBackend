@@ -151,6 +151,7 @@ func (a *API) LoginAccount(w http.ResponseWriter, r *http.Request) {
 		DeviceName  string `json:"device_name"`
 		Platform    string `json:"platform"`
 		PairingCode string `json:"pairing_code"`
+		HardwareFP  string `json:"hardware_fp"`
 	}
 	if err := decodeJSON(r, &in, 12<<10); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -167,6 +168,10 @@ func (a *API) LoginAccount(w http.ResponseWriter, r *http.Request) {
 	deviceName := strings.TrimSpace(in.DeviceName)
 	platform := strings.TrimSpace(in.Platform)
 	pairingCode := strings.TrimSpace(in.PairingCode)
+	hardwareFP := strings.TrimSpace(in.HardwareFP)
+	if len(hardwareFP) > 128 || hasControlChars(hardwareFP) {
+		hardwareFP = ""
+	}
 	if !validUsername(username) || len(password) < 8 || len(password) > maxPasswordLen || hasControlChars(password) || len(deviceID) > 128 || hasControlChars(deviceID) || deviceName == "" || len(deviceName) > maxDeviceName || hasControlChars(deviceName) {
 		writeError(w, http.StatusBadRequest, "invalid username, password, device id, or device name")
 		return
@@ -249,11 +254,27 @@ func (a *API) LoginAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to inspect device")
 		return
 	} else {
-		// First-time login from a new device is a device-enrollment event.
-		// Require the deployment pairing code when the server is configured with one.
-		if required := strings.TrimSpace(getenv("LOCALLINK_PAIRING_CODE", "")); required != "" && !secureTokenEqual(required, pairingCode) {
-			writeError(w, http.StatusForbidden, "device pairing is required for this first login")
-			return
+		// Reinstall dedupe: the app regenerated its per-install device id, but the
+		// hardware fingerprint proves this is the same physical phone. Reuse the
+		// existing (old) device row instead of inserting a duplicate. Password
+		// verification above is the ownership proof, and the bind requires the
+		// row to already belong to this user — it cannot claim another account's device.
+		if hardwareFP != "" {
+			var bound string
+			bindErr := a.store.DB().QueryRow(`SELECT id FROM devices WHERE hardware_fp=? AND user_id=? AND COALESCE(status,'active')='active' ORDER BY last_seen_at DESC LIMIT 1`, hardwareFP, user.ID).Scan(&bound)
+			if bindErr == nil && bound != "" {
+				deviceID = bound
+				deviceOwner = sql.NullString{String: user.ID, Valid: true}
+				err = nil
+			}
+		}
+		if err != nil && errors.Is(err, sql.ErrNoRows) {
+			// First-time login from a new device is a device-enrollment event.
+			// Require the deployment pairing code when the server is configured with one.
+			if required := strings.TrimSpace(getenv("LOCALLINK_PAIRING_CODE", "")); required != "" && !secureTokenEqual(required, pairingCode) {
+				writeError(w, http.StatusForbidden, "device pairing is required for this first login")
+				return
+			}
 		}
 	}
 
@@ -274,13 +295,13 @@ func (a *API) LoginAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	if err == nil && deviceOwner.Valid {
-		if _, err = tx.Exec(`UPDATE devices SET name=?,platform=?,last_seen_at=?,token_hash=? WHERE id=? AND user_id=?`, deviceName, platform, nowText, tokenHash(token), deviceID, user.ID); err != nil {
+		if _, err = tx.Exec(`UPDATE devices SET name=?,platform=?,last_seen_at=?,token_hash=?,hardware_fp=CASE WHEN ?='' THEN hardware_fp ELSE ? END WHERE id=? AND user_id=?`, deviceName, platform, nowText, tokenHash(token), hardwareFP, hardwareFP, deviceID, user.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update device session")
 			return
 		}
 		_, _ = tx.Exec(`UPDATE auth_sessions SET revoked_at=? WHERE device_id=? AND revoked_at IS NULL`, nowText, deviceID)
 	} else {
-		if _, err = tx.Exec(`INSERT INTO devices(id,name,platform,created_at,last_seen_at,token_hash,user_id) VALUES(?,?,?,?,?,?,?)`, deviceID, deviceName, platform, nowText, nowText, tokenHash(token), user.ID); err != nil {
+		if _, err = tx.Exec(`INSERT INTO devices(id,name,platform,created_at,last_seen_at,token_hash,user_id,hardware_fp) VALUES(?,?,?,?,?,?,?,?)`, deviceID, deviceName, platform, nowText, nowText, tokenHash(token), user.ID, hardwareFP); err != nil {
 			writeError(w, http.StatusConflict, "device registration conflict")
 			return
 		}

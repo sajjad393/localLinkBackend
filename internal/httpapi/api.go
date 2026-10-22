@@ -257,6 +257,7 @@ func (a *API) RegisterDevice(w http.ResponseWriter, r *http.Request) {
 		Platform    string `json:"platform"`
 		PairingCode string `json:"pairing_code"`
 		Token       string `json:"token"`
+		HardwareFP  string `json:"hardware_fp"`
 	}
 	if err := decodeJSON(r, &in, 8<<10); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -268,6 +269,10 @@ func (a *API) RegisterDevice(w http.ResponseWriter, r *http.Request) {
 	in.Platform = strings.TrimSpace(in.Platform)
 	in.PairingCode = strings.TrimSpace(in.PairingCode)
 	in.Token = strings.TrimSpace(in.Token)
+	in.HardwareFP = strings.TrimSpace(in.HardwareFP)
+	if len(in.HardwareFP) > 128 || hasControlChars(in.HardwareFP) {
+		in.HardwareFP = ""
+	}
 	if in.Name == "" || len(in.Name) > maxDeviceName || hasControlChars(in.Name) {
 		writeError(w, http.StatusBadRequest, "name must be 1-64 characters")
 		return
@@ -299,7 +304,7 @@ FROM devices WHERE id=?`, id).Scan(&existing.ID, &existing.Name, &existing.Platf
 				return
 			}
 			now := time.Now().UTC().Format(time.RFC3339Nano)
-			if _, err := a.store.DB().Exec(`UPDATE devices SET name=?,platform=?,last_seen_at=? WHERE id=?`, in.Name, in.Platform, now, id); err != nil {
+			if _, err := a.store.DB().Exec(`UPDATE devices SET name=?,platform=?,last_seen_at=?,hardware_fp=CASE WHEN ?='' THEN hardware_fp ELSE ? END WHERE id=?`, in.Name, in.Platform, now, in.HardwareFP, in.HardwareFP, id); err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to update device")
 				return
 			}
@@ -332,8 +337,8 @@ FROM devices WHERE id=?`, id).Scan(&existing.ID, &existing.Name, &existing.Platf
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = a.store.DB().Exec(`
-INSERT INTO devices(id,name,platform,created_at,last_seen_at,token_hash)
-VALUES(?,?,?,?,?,?)`, id, in.Name, in.Platform, now, now, tokenHash(token))
+INSERT INTO devices(id,name,platform,created_at,last_seen_at,token_hash,hardware_fp)
+VALUES(?,?,?,?,?,?,?)`, id, in.Name, in.Platform, now, now, tokenHash(token), in.HardwareFP)
 	if err != nil {
 		writeError(w, http.StatusConflict, "device registration conflict")
 		return
