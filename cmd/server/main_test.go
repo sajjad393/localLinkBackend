@@ -10,6 +10,9 @@ import (
 
 func TestValidateProductionSecretsRequiresPairingCode(t *testing.T) {
 	t.Setenv("LOCALLINK_ENV", "production")
+	// The developer machine may run a non-TLS server (LOCALLINK_REQUIRE_TLS=false)
+	// in its user environment; this test must not depend on ambient shell state.
+	t.Setenv("LOCALLINK_REQUIRE_TLS", "true")
 	t.Setenv("LOCALLINK_TLS_CERT", "test-cert.pem")
 	t.Setenv("LOCALLINK_TLS_KEY", "test-key.pem")
 	t.Setenv("LOCALLINK_ADMIN_BOOTSTRAP_USERNAME", "")
