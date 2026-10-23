@@ -14,6 +14,11 @@ type AccountContact struct {
 	UserID   string `json:"user_id"`
 	DeviceID string `json:"device_id"`
 	AddedAt  string `json:"added_at"`
+	// IsPrivate is per-lister: it gates re-sharing (search results / gossip
+	// sync rows) of this entry on the account that holds it, NOT the
+	// reciprocal side. Omitted from JSON when false so older clients are
+	// byte-compatible.
+	IsPrivate bool `json:"is_private,omitempty"`
 }
 
 func (a *API) accountContactsForUser(userID string) ([]AccountContact, error) {
@@ -30,7 +35,8 @@ func (a *API) accountContactsForUser(userID string) ([]AccountContact, error) {
 	rows, err := a.store.DB().Query(`
 		SELECT c.contact_user_id,
 			COALESCE((SELECT d.id FROM devices d WHERE d.user_id=c.contact_user_id AND COALESCE(d.status,'active')='active' ORDER BY d.last_seen_at DESC LIMIT 1),''),
-			c.added_at
+			c.added_at,
+			COALESCE(c.is_private,0)
 		FROM account_contacts c
 		JOIN users u ON u.id=c.contact_user_id AND u.status='active'
 		WHERE c.user_id=?
@@ -42,9 +48,11 @@ func (a *API) accountContactsForUser(userID string) ([]AccountContact, error) {
 	out := make([]AccountContact, 0)
 	for rows.Next() {
 		var c AccountContact
-		if err := rows.Scan(&c.UserID, &c.DeviceID, &c.AddedAt); err != nil {
+		var isPrivate int
+		if err := rows.Scan(&c.UserID, &c.DeviceID, &c.AddedAt, &isPrivate); err != nil {
 			return nil, err
 		}
+		c.IsPrivate = isPrivate != 0
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -71,7 +79,8 @@ func (a *API) AddAccountContact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		UserID string `json:"user_id"`
+		UserID    string `json:"user_id"`
+		IsPrivate *bool  `json:"is_private"`
 	}
 	if err := decodeJSON(r, &in, 4<<10); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -92,13 +101,34 @@ func (a *API) AddAccountContact(w http.ResponseWriter, r *http.Request) {
 	// fresh-install restore returns the pair. INSERT OR IGNORE keeps repeated
 	// adds idempotent (no duplicate rows, no 409 churn).
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := a.store.DB().Exec(`INSERT OR IGNORE INTO account_contacts(user_id,contact_user_id,added_at) VALUES(?,?,?)`, userID, contactID, now); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to add contact")
-		return
+	// A's row carries A's privacy mark for B; the reciprocal row always
+	// defaults public (0) — one side may never impose privacy on the other
+	// side's entry. A second call with an explicit is_private acts as a TOGGLE
+	// on the existing row (UPSERT on the pair primary key), which is how the
+	// app updates the flag without removing/re-adding the contact.
+	isPrivate := 0
+	if in.IsPrivate != nil && *in.IsPrivate {
+		isPrivate = 1
 	}
-	if _, err := a.store.DB().Exec(`INSERT OR IGNORE INTO account_contacts(user_id,contact_user_id,added_at) VALUES(?,?,?)`, contactID, userID, now); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to add contact")
-		return
+	if in.IsPrivate != nil {
+		if _, err := a.store.DB().Exec(`INSERT INTO account_contacts(user_id,contact_user_id,added_at,is_private) VALUES(?,?,?,?)
+			ON CONFLICT(user_id,contact_user_id) DO UPDATE SET is_private=excluded.is_private`, userID, contactID, now, isPrivate); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to add contact")
+			return
+		}
+		if _, err := a.store.DB().Exec(`INSERT OR IGNORE INTO account_contacts(user_id,contact_user_id,added_at) VALUES(?,?,?)`, contactID, userID, now); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to add contact")
+			return
+		}
+	} else {
+		if _, err := a.store.DB().Exec(`INSERT OR IGNORE INTO account_contacts(user_id,contact_user_id,added_at) VALUES(?,?,?)`, userID, contactID, now); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to add contact")
+			return
+		}
+		if _, err := a.store.DB().Exec(`INSERT OR IGNORE INTO account_contacts(user_id,contact_user_id,added_at) VALUES(?,?,?)`, contactID, userID, now); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to add contact")
+			return
+		}
 	}
 	a.audit("account_contact_added", userID, "contact="+contactID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

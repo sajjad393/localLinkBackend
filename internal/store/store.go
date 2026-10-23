@@ -526,6 +526,14 @@ CREATE INDEX IF NOT EXISTS idx_group_message_attachments_file ON group_message_a
 	)`); err != nil {
 		return err
 	}
+	// Per-contact privacy flag (bundle 90): a LISTER marks one of their own
+	// contact entries private (default public, 0). Private entries must not be
+	// re-shared by that device in search results or gossip sync rows. The flag
+	// is deliberately per (user_id, contact_user_id): the reciprocal row keeps
+	// its own value — consent stays with the account that holds the entry.
+	if err := s.ensureColumn("account_contacts", "is_private", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS users (
 		id TEXT PRIMARY KEY,
 		username TEXT NOT NULL COLLATE NOCASE UNIQUE,
