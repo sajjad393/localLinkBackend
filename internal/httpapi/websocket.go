@@ -46,6 +46,8 @@ type WSMessage struct {
 	WiFiEnabled          bool         `json:"wifi_enabled,omitempty"`
 	LanAvailable         bool         `json:"lan_available,omitempty"`
 	MeshAvailable        bool         `json:"mesh_available,omitempty"`
+	// Bundle G5: group receipts (many ids at once).
+	MessageIDs []string `json:"message_ids,omitempty"`
 }
 
 func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
@@ -324,6 +326,14 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				a.hub.SendTo(m.SenderID, mustJSON(WSMessage{Type: "delivery_ack", ID: m.ID, SenderID: m.SenderID, RecipientID: m.RecipientID, Status: m.Status, CreatedAt: m.DeliveredAt, ServerSeq: m.ServerSeq, Attachments: m.Attachments}))
+			case "group_receipt":
+				// Bundle G5: "got it" / "read" per member -> the writer.
+				if err := a.handleGroupReceipt(deviceID, msg); err != nil {
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", GroupID: msg.GroupID, ErrorCode: "GROUP_RECEIPT_REFUSED", Error: err.Error()}))
+				}
+			case "group_typing":
+				// Bundle G5: "Sara is typing…" to the members online now.
+				a.handleGroupTyping(deviceID, msg)
 			case "send_group_message":
 				createdAt, timestampOK := normalizeGroupMessageCreatedAt(msg.CreatedAt)
 				if strings.TrimSpace(msg.GroupID) == "" || !timestampOK || (strings.TrimSpace(msg.Body) == "" && len(msg.AttachmentIDs) == 0) || len(msg.Body) > maxGroupMessageBody || len(msg.AttachmentIDs) > maxAttachmentsPerMessage {
@@ -331,7 +341,7 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if !a.isGroupMember(msg.GroupID, deviceID) {
-					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, Error: "device is not a group member"}))
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, ErrorCode: groupErrNotMember, Error: "device is not a group member"}))
 					continue
 				}
 				if !a.allowMessage(deviceID) {
@@ -340,7 +350,13 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 				}
 				m, existing, err := a.insertGroupMessage(deviceID, msg.GroupID, msg.Body, createdAt, msg.ID, msg.AttachmentIDs)
 				if err != nil {
-					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, Error: err.Error()}))
+					code := ""
+					if errors.Is(err, errGroupAdminsOnly) {
+						code = groupErrAdminsOnly
+					} else if strings.Contains(err.Error(), "device is not a group member") {
+						code = groupErrNotMember
+					}
+					_ = client.WriteText(mustJSON(WSMessage{Type: "error", ID: msg.ID, ErrorCode: code, Error: err.Error()}))
 					continue
 				}
 				_ = client.WriteText(mustJSON(WSMessage{Type: "group_message_ack", ID: m.ID, GroupID: m.GroupID, SenderID: m.SenderID, Body: m.Body, CreatedAt: m.CreatedAt, ServerSeq: m.ServerSeq, ClientMessageID: msg.ID, Attachments: m.Attachments}))

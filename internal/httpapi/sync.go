@@ -86,7 +86,7 @@ func (a *API) Sync(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			var g Group
-			err := a.store.DB().QueryRow(`SELECT id,name,owner_id,created_at FROM groups WHERE id=?`, e.ID).Scan(&g.ID, &g.Name, &g.OwnerID, &g.CreatedAt)
+			err := scanGroup(a.store.DB().QueryRow(`SELECT `+groupSelectCols+` FROM groups g WHERE g.id=?`, e.ID), &g)
 			if err == nil {
 				resp.Groups = append(resp.Groups, g)
 				members, merr := a.groupMembersForSync(e.ID)
@@ -150,7 +150,7 @@ func (a *API) Sync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, resp)
 }
 func (a *API) groupMembersForSync(groupID string) ([]GroupMember, error) {
-	rows, err := a.store.DB().Query(`SELECT gm.group_id,gm.device_id,gm.role,gm.joined_at,d.name FROM group_members gm JOIN devices d ON d.id=gm.device_id WHERE gm.group_id=? ORDER BY gm.role DESC,d.name COLLATE NOCASE`, groupID)
+	rows, err := a.store.DB().Query(`SELECT gm.group_id,gm.device_id,gm.role,gm.joined_at,`+memberNameSQL+`,gm.added_by,COALESCE(d.user_id,'') FROM group_members gm JOIN devices d ON d.id=gm.device_id LEFT JOIN profiles p ON p.user_id=d.user_id WHERE gm.group_id=? ORDER BY gm.role DESC,`+memberNameSQL+` COLLATE NOCASE`, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +158,7 @@ func (a *API) groupMembersForSync(groupID string) ([]GroupMember, error) {
 	var out []GroupMember
 	for rows.Next() {
 		var m GroupMember
-		if err := rows.Scan(&m.GroupID, &m.DeviceID, &m.Role, &m.JoinedAt, &m.Name); err != nil {
+		if err := rows.Scan(&m.GroupID, &m.DeviceID, &m.Role, &m.JoinedAt, &m.Name, &m.AddedBy, &m.UserID); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

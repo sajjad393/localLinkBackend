@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -16,10 +17,16 @@ const maxGroupMembers = 100
 const maxGroupMessageBody = 16 * 1024
 
 type Group struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	OwnerID   string `json:"owner_id"`
-	CreatedAt string `json:"created_at"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	OwnerID      string `json:"owner_id"`
+	CreatedAt    string `json:"created_at"`
+	Description  string `json:"description"`
+	PhotoVersion int64  `json:"photo_version"`
+	EditInfo     string `json:"edit_info"`
+	SendMessages string `json:"send_messages"`
+	AddMembers   string `json:"add_members"`
+	CreatedBy    string `json:"created_by"`
 }
 
 type GroupMember struct {
@@ -28,6 +35,8 @@ type GroupMember struct {
 	Role     string `json:"role"`
 	JoinedAt string `json:"joined_at"`
 	Name     string `json:"name,omitempty"`
+	AddedBy  string `json:"added_by,omitempty"`
+	UserID   string `json:"user_id,omitempty"`
 }
 
 type GroupMessage struct {
@@ -58,7 +67,7 @@ func (a *API) ListGroups(w http.ResponseWriter, r *http.Request) {
 		args = append(args, params.Cursor.Key, params.Cursor.Key, params.Cursor.ID)
 	}
 	args = append(args, params.Limit+1)
-	rows, err := a.store.DB().Query(`SELECT g.id,g.name,g.owner_id,g.created_at FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE `+where+` ORDER BY g.name COLLATE NOCASE,g.id LIMIT ?`, args...)
+	rows, err := a.store.DB().Query(`SELECT `+groupSelectCols+` FROM groups g JOIN group_members gm ON gm.group_id=g.id WHERE `+where+` ORDER BY g.name COLLATE NOCASE,g.id LIMIT ?`, args...)
 	if err != nil {
 		writeError(w, 500, "failed to list groups")
 		return
@@ -67,7 +76,7 @@ func (a *API) ListGroups(w http.ResponseWriter, r *http.Request) {
 	out := make([]Group, 0, params.Limit)
 	for rows.Next() {
 		var g Group
-		if err := rows.Scan(&g.ID, &g.Name, &g.OwnerID, &g.CreatedAt); err != nil {
+		if err := scanGroup(rows, &g); err != nil {
 			writeError(w, 500, "failed to read groups")
 			return
 		}
@@ -100,8 +109,17 @@ func (a *API) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name      string   `json:"name"`
-		MemberIDs []string `json:"member_ids"`
+		Name         string   `json:"name"`
+		MemberIDs    []string `json:"member_ids"`
+		Description  string   `json:"description"`
+		EditInfo     string   `json:"edit_info"`
+		SendMessages string   `json:"send_messages"`
+		AddMembers   string   `json:"add_members"`
+		// Bundle G3: the id a phone made (Nearby groups keep it); bridge =
+		// the group already exists on phones (no "created" line, people the
+		// server never saw are left out instead of failing).
+		ID     string `json:"id"`
+		Bridge bool   `json:"bridge"`
 	}
 	if err := decodeJSON(r, &in, 32<<10); err != nil {
 		writeError(w, 400, "invalid request body")
@@ -110,6 +128,28 @@ func (a *API) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	in.Name = strings.TrimSpace(in.Name)
 	if in.Name == "" || len(in.Name) > 80 || hasControlChars(in.Name) {
 		writeError(w, 400, "name must be 1-80 characters")
+		return
+	}
+	// Bundle G2: optional description + settings (defaults as the mock).
+	in.Description = strings.TrimSpace(in.Description)
+	if len([]rune(in.Description)) > maxGroupDescription {
+		writeError(w, 400, "description must be at most 300 characters")
+		return
+	}
+	for _, s := range []*string{&in.EditInfo, &in.SendMessages, &in.AddMembers} {
+		*s = strings.TrimSpace(*s)
+	}
+	if in.EditInfo == "" {
+		in.EditInfo = "admins"
+	}
+	if in.SendMessages == "" {
+		in.SendMessages = "all"
+	}
+	if in.AddMembers == "" {
+		in.AddMembers = "admins"
+	}
+	if !validGroupSetting(in.EditInfo) || !validGroupSetting(in.SendMessages) || !validGroupSetting(in.AddMembers) {
+		writeError(w, 400, "settings must be all or admins")
 		return
 	}
 	ids := map[string]bool{owner: true}
@@ -123,13 +163,35 @@ func (a *API) CreateGroup(w http.ResponseWriter, r *http.Request) {
 			ids[id] = true
 		}
 	}
+	in.ID = strings.TrimSpace(in.ID)
+	if in.ID != "" {
+		if _, err := uuid.Parse(in.ID); err != nil || len(in.ID) != 36 {
+			writeError(w, 400, "id must be a UUID")
+			return
+		}
+		if existing, err := a.loadGroup(in.ID); err == nil {
+			if existing.OwnerID != owner {
+				writeError(w, 409, "group id already used")
+				return
+			}
+			writeJSON(w, 200, existing)
+			return
+		}
+	}
 	for id := range ids {
 		if !a.deviceExists(id) {
+			if in.Bridge && id != owner {
+				delete(ids, id)
+				continue
+			}
 			writeError(w, 404, "member device not found: "+id)
 			return
 		}
 	}
 	gid := uuid.NewString()
+	if in.ID != "" {
+		gid = in.ID
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	tx, err := a.store.DB().Begin()
 	if err != nil {
@@ -137,7 +199,7 @@ func (a *API) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`INSERT INTO groups(id,name,owner_id,created_at) VALUES(?,?,?,?)`, gid, in.Name, owner, now); err != nil {
+	if _, err = tx.Exec(`INSERT INTO groups(id,name,owner_id,created_at,description,edit_info,send_messages,add_members,created_by) VALUES(?,?,?,?,?,?,?,?,?)`, gid, in.Name, owner, now, in.Description, in.EditInfo, in.SendMessages, in.AddMembers, owner); err != nil {
 		writeError(w, 500, "failed to create group")
 		return
 	}
@@ -146,7 +208,11 @@ func (a *API) CreateGroup(w http.ResponseWriter, r *http.Request) {
 		if id == owner {
 			role = "owner"
 		}
-		if _, err = tx.Exec(`INSERT INTO group_members(group_id,device_id,role,joined_at) VALUES(?,?,?,?)`, gid, id, role, now); err != nil {
+		addedBy := owner
+		if id == owner {
+			addedBy = ""
+		}
+		if _, err = tx.Exec(`INSERT INTO group_members(group_id,device_id,role,joined_at,added_by) VALUES(?,?,?,?,?)`, gid, id, role, now, addedBy); err != nil {
 			writeError(w, 500, "failed to add group member")
 			return
 		}
@@ -155,11 +221,31 @@ func (a *API) CreateGroup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Bundle G2: "Sajjad created group" / "Sajjad added you" line.
+	var added []string
+	for id := range ids {
+		if id != owner {
+			added = append(added, id)
+		}
+	}
+	sort.Strings(added)
+	var ev GroupMessage
+	var evTo []string
+	if !in.Bridge {
+		ev, evTo, err = a.emitGroupEventTx(tx, gid, groupEvent{Kind: "create", By: owner, Name: in.Name, Targets: added})
+		if err != nil {
+			writeError(w, 500, "failed to store group event")
+			return
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		writeError(w, 500, "failed to commit group")
 		return
 	}
-	writeJSON(w, 201, Group{ID: gid, Name: in.Name, OwnerID: owner, CreatedAt: now})
+	if !in.Bridge {
+		a.sendGroupEvent(ev, evTo)
+	}
+	writeJSON(w, 201, Group{ID: gid, Name: in.Name, OwnerID: owner, CreatedAt: now, Description: in.Description, EditInfo: in.EditInfo, SendMessages: in.SendMessages, AddMembers: in.AddMembers, CreatedBy: owner})
 }
 
 func (a *API) GroupMembers(w http.ResponseWriter, r *http.Request) {
@@ -181,7 +267,7 @@ func (a *API) GroupMembers(w http.ResponseWriter, r *http.Request) {
 	// device label ("My Android Phone (xxxx)"): join through devices -> users
 	// -> profiles and only fall back to the device name when no profile
 	// nickname exists at all.
-	rows, err := a.store.DB().Query(`SELECT gm.group_id,gm.device_id,gm.role,gm.joined_at,COALESCE(NULLIF(TRIM(p.display_name),''),d.name) FROM group_members gm JOIN devices d ON d.id=gm.device_id LEFT JOIN profiles p ON p.user_id=d.user_id WHERE gm.group_id=? ORDER BY gm.role DESC,COALESCE(NULLIF(TRIM(p.display_name),''),d.name) COLLATE NOCASE`, gid)
+	rows, err := a.store.DB().Query(`SELECT gm.group_id,gm.device_id,gm.role,gm.joined_at,COALESCE(NULLIF(TRIM(p.display_name),''),d.name),gm.added_by,COALESCE(d.user_id,'') FROM group_members gm JOIN devices d ON d.id=gm.device_id LEFT JOIN profiles p ON p.user_id=d.user_id WHERE gm.group_id=? ORDER BY gm.role DESC,COALESCE(NULLIF(TRIM(p.display_name),''),d.name) COLLATE NOCASE`, gid)
 	if err != nil {
 		writeError(w, 500, "failed to list members")
 		return
@@ -190,7 +276,7 @@ func (a *API) GroupMembers(w http.ResponseWriter, r *http.Request) {
 	out := []GroupMember{}
 	for rows.Next() {
 		var m GroupMember
-		if err := rows.Scan(&m.GroupID, &m.DeviceID, &m.Role, &m.JoinedAt, &m.Name); err != nil {
+		if err := rows.Scan(&m.GroupID, &m.DeviceID, &m.Role, &m.JoinedAt, &m.Name, &m.AddedBy, &m.UserID); err != nil {
 			writeError(w, 500, "failed to read members")
 			return
 		}
@@ -210,9 +296,17 @@ func (a *API) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "group_id is required")
 		return
 	}
-	if !a.isGroupOwner(gid, actor) {
-		writeError(w, 403, "only the group owner can add members")
+	// Bundle G2: admins add; everyone when "Add members" = All members.
+	actorRole := a.groupRole(gid, actor)
+	if actorRole == "" {
+		writeGroupError(w, 403, groupErrNotMember, "device is not a group member")
 		return
+	}
+	if !isAdminRole(actorRole) {
+		if g, gerr := a.loadGroup(gid); gerr != nil || g.AddMembers != "all" {
+			writeGroupError(w, 403, groupErrAdminsOnly, "only admins can add members")
+			return
+		}
 	}
 	var in struct {
 		DeviceID string `json:"device_id"`
@@ -224,6 +318,12 @@ func (a *API) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 	in.DeviceID = strings.TrimSpace(in.DeviceID)
 	if !a.deviceExists(in.DeviceID) {
 		writeError(w, 404, "device not found")
+		return
+	}
+	// Bundle G2 (B3): only your own friends can be added.
+	// Bundle G6: or someone who asked to join with the invite link.
+	if !a.isGroupMember(gid, in.DeviceID) && !a.areContacts(actor, in.DeviceID) && !a.hasJoinRequest(gid, in.DeviceID) {
+		writeGroupError(w, 403, "GROUP_NOT_CONTACT", "you can only add your friends")
 		return
 	}
 	var memberCount int
@@ -242,11 +342,12 @@ func (a *API) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	result, err := tx.Exec(`INSERT OR IGNORE INTO group_members(group_id,device_id,role,joined_at) VALUES(?,?,?,?)`, gid, in.DeviceID, "member", now)
+	result, err := tx.Exec(`INSERT OR IGNORE INTO group_members(group_id,device_id,role,joined_at,added_by) VALUES(?,?,?,?,?)`, gid, in.DeviceID, "member", now, actor)
 	if err != nil {
 		writeError(w, 500, "failed to add member")
 		return
 	}
+	_, _ = tx.Exec(`DELETE FROM group_join_requests WHERE group_id=? AND device_id=?`, gid, in.DeviceID)
 	affected, err := result.RowsAffected()
 	if err != nil {
 		writeError(w, 500, "failed to determine membership change")
@@ -265,10 +366,20 @@ func (a *API) AddGroupMember(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var ev GroupMessage
+	var evTo []string
+	if affected == 1 {
+		ev, evTo, err = a.emitGroupEventTx(tx, gid, groupEvent{Kind: "add", By: actor, Targets: []string{in.DeviceID}})
+		if err != nil {
+			writeError(w, 500, "failed to store group event")
+			return
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		writeError(w, 500, "failed to add member")
 		return
 	}
+	a.sendGroupEvent(ev, evTo)
 	status := http.StatusOK
 	if affected == 1 {
 		status = http.StatusCreated
@@ -287,8 +398,13 @@ func (a *API) RemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "group_id is required")
 		return
 	}
-	if !a.isGroupOwner(gid, actor) {
-		writeError(w, 403, "only the group owner can remove members")
+	actorRole := a.groupRole(gid, actor)
+	if actorRole == "" {
+		writeGroupError(w, 403, groupErrNotMember, "device is not a group member")
+		return
+	}
+	if !isAdminRole(actorRole) {
+		writeGroupError(w, 403, groupErrAdminsOnly, "only admins can remove members")
 		return
 	}
 	id := strings.TrimSpace(r.URL.Query().Get("device_id"))
@@ -299,6 +415,17 @@ func (a *API) RemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 	if id == actor {
 		writeError(w, 400, "owner cannot remove itself")
 		return
+	}
+	// Bundle G2: nobody removes the owner; only the owner removes an admin.
+	switch a.groupRole(gid, id) {
+	case "owner":
+		writeGroupError(w, 403, groupErrAdminsOnly, "the owner cannot be removed")
+		return
+	case "admin":
+		if actorRole != "owner" {
+			writeGroupError(w, 403, groupErrAdminsOnly, "only the owner can remove an admin")
+			return
+		}
 	}
 	tx, err := a.store.DB().Begin()
 	if err != nil {
@@ -331,6 +458,13 @@ func (a *API) RemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "failed to create group removal event")
 		return
 	}
+	// Bundle G2: "Sajjad removed Sara" - the removed phone gets it live too.
+	ev, evTo, err := a.emitGroupEventTx(tx, gid, groupEvent{Kind: "remove", By: actor, Targets: []string{id}})
+	if err != nil {
+		writeError(w, 500, "failed to store group event")
+		return
+	}
+	evTo = append(evTo, id)
 	remaining, err := a.groupMemberIDsTx(tx, gid)
 	if err != nil {
 		writeError(w, 500, "failed to read remaining group members")
@@ -346,6 +480,7 @@ func (a *API) RemoveGroupMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "failed to remove member")
 		return
 	}
+	a.sendGroupEvent(ev, evTo)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -449,7 +584,7 @@ func (a *API) CreateGroupMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !a.isGroupMember(in.GroupID, sender) {
-		writeError(w, 403, "device is not a group member")
+		writeGroupError(w, 403, groupErrNotMember, "device is not a group member")
 		return
 	}
 	if !a.allowMessage(sender) {
@@ -459,8 +594,12 @@ func (a *API) CreateGroupMessage(w http.ResponseWriter, r *http.Request) {
 	m, existing, err := a.insertGroupMessage(sender, in.GroupID, in.Body, createdAt, in.ID, in.AttachmentIDs)
 	if err != nil {
 		errorText := err.Error()
+		if errors.Is(err, errGroupAdminsOnly) {
+			writeGroupError(w, http.StatusForbidden, groupErrAdminsOnly, errorText)
+			return
+		}
 		if strings.Contains(errorText, "device is not a group member") {
-			writeError(w, http.StatusForbidden, errorText)
+			writeGroupError(w, http.StatusForbidden, groupErrNotMember, errorText)
 			return
 		}
 		if strings.Contains(errorText, "different message") || strings.Contains(errorText, "attachment") || strings.Contains(errorText, "too many") {
@@ -535,12 +674,27 @@ func (a *API) insertGroupMessage(sender, gid, body, createdAt, requested string,
 	if !errors.Is(err, sql.ErrNoRows) {
 		return m, false, err
 	}
-	var memberExists int
-	if err = tx.QueryRow(`SELECT 1 FROM group_members WHERE group_id=? AND device_id=?`, gid, sender).Scan(&memberExists); err != nil {
+	var senderRole string
+	if err = tx.QueryRow(`SELECT role FROM group_members WHERE group_id=? AND device_id=?`, gid, sender).Scan(&senderRole); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return m, false, errors.New("device is not a group member")
 		}
 		return m, false, err
+	}
+	// Bundle G2: "Send messages: Only admins". System lines are not
+	// written here; they never get this check.
+	if !isAdminRole(senderRole) && !strings.HasPrefix(body, groupEventPrefix) {
+		var send string
+		if err = tx.QueryRow(`SELECT send_messages FROM groups WHERE id=?`, gid).Scan(&send); err != nil {
+			return m, false, err
+		}
+		if send == "admins" {
+			return m, false, errGroupAdminsOnly
+		}
+	}
+	// Bundle G2: only the server writes system lines.
+	if strings.HasPrefix(body, groupEventPrefix) {
+		return m, false, errors.New("group message body is reserved")
 	}
 	if len(attachmentIDs) > maxAttachmentsPerMessage {
 		return m, false, errors.New("too many attachments")

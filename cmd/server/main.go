@@ -146,6 +146,23 @@ func main() {
 	mux.HandleFunc("GET /api/v1/groups/members", api.GroupMembers)
 	mux.HandleFunc("POST /api/v1/groups/members", api.AddGroupMember)
 	mux.HandleFunc("DELETE /api/v1/groups/members", api.RemoveGroupMember)
+	// Bundle G2: admins, info, photo, leave.
+	mux.HandleFunc("PATCH /api/v1/groups", api.UpdateGroup)
+	mux.HandleFunc("GET /api/v1/groups/info", api.GroupInfo)
+	mux.HandleFunc("GET /api/v1/groups/photo", api.GroupPhoto)
+	mux.HandleFunc("PUT /api/v1/groups/photo", api.SetGroupPhoto)
+	mux.HandleFunc("DELETE /api/v1/groups/photo", api.SetGroupPhoto)
+	mux.HandleFunc("POST /api/v1/groups/leave", api.LeaveGroup)
+	mux.HandleFunc("POST /api/v1/groups/role", api.SetGroupRole)
+	// Bundle G5: receipts per member (Message info).
+	mux.HandleFunc("GET /api/v1/groups/receipts", api.GroupReceipts)
+	// Bundle G6: invite link.
+	mux.HandleFunc("POST /api/v1/groups/invite", api.GroupInvite)
+	mux.HandleFunc("GET /api/v1/groups/join", api.GroupJoinPreview)
+	mux.HandleFunc("POST /api/v1/groups/join", api.GroupJoin)
+	mux.HandleFunc("GET /api/v1/groups/join-requests", api.GroupJoinRequests)
+	mux.HandleFunc("DELETE /api/v1/groups/join-requests", api.GroupJoinDecline)
+	mux.HandleFunc("GET /join/{token}", api.GroupJoinPage)
 	mux.HandleFunc("GET /api/v1/group-messages", api.ListGroupMessages)
 	mux.HandleFunc("POST /api/v1/group-messages", api.CreateGroupMessage)
 	mux.HandleFunc("POST /api/v1/messages", api.CreateMessage)

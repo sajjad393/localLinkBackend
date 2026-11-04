@@ -534,6 +534,60 @@ CREATE INDEX IF NOT EXISTS idx_group_message_attachments_file ON group_message_a
 	if err := s.ensureColumn("account_contacts", "is_private", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	// Bundle G2: group info, settings, photo and who added whom.
+	for _, col := range []struct{ table, name, def string }{
+		{"groups", "description", "TEXT NOT NULL DEFAULT ''"},
+		{"groups", "photo_version", "INTEGER NOT NULL DEFAULT 0"},
+		{"groups", "edit_info", "TEXT NOT NULL DEFAULT 'admins'"},
+		{"groups", "send_messages", "TEXT NOT NULL DEFAULT 'all'"},
+		{"groups", "add_members", "TEXT NOT NULL DEFAULT 'admins'"},
+		{"groups", "created_by", "TEXT NOT NULL DEFAULT ''"},
+		{"group_members", "added_by", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.ensureColumn(col.table, col.name, col.def); err != nil {
+			return err
+		}
+	}
+	if _, err := s.db.Exec(`UPDATE groups SET created_by=owner_id WHERE created_by=''`); err != nil {
+		return err
+	}
+	// Bundle G5: per-member "got it" / "read" for group messages.
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS group_receipts (
+		message_id TEXT NOT NULL,
+		group_id TEXT NOT NULL,
+		device_id TEXT NOT NULL,
+		sender_id TEXT NOT NULL,
+		delivered_at TEXT NOT NULL DEFAULT '',
+		read_at TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY(message_id, device_id)
+	); CREATE INDEX IF NOT EXISTS idx_group_receipts_sender ON group_receipts(sender_id, group_id, updated_at);`); err != nil {
+		return err
+	}
+	// Bundle G6: one invite link per group + "Ask to join" requests (24 h).
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS group_invites (
+		group_id TEXT PRIMARY KEY REFERENCES groups(id) ON DELETE CASCADE,
+		token TEXT NOT NULL UNIQUE,
+		approve INTEGER NOT NULL DEFAULT 0,
+		created_by TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	); CREATE TABLE IF NOT EXISTS group_join_requests (
+		group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+		device_id TEXT NOT NULL,
+		seal TEXT NOT NULL DEFAULT '',
+		sign TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		PRIMARY KEY(group_id, device_id)
+	);`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS group_photos (
+		group_id TEXT PRIMARY KEY REFERENCES groups(id) ON DELETE CASCADE,
+		jpeg BLOB NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS users (
 		id TEXT PRIMARY KEY,
 		username TEXT NOT NULL COLLATE NOCASE UNIQUE,
