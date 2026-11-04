@@ -348,6 +348,12 @@ func (a *API) GetProfileAvatar(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	a.serveAvatar(w, r, userID)
+}
+
+// serveAvatar: Bundle 204 - the stored picture of [userID] (own picture and
+// a friend's picture use the same code).
+func (a *API) serveAvatar(w http.ResponseWriter, r *http.Request, userID string) {
 	var path, contentType, checksum string
 	var size int64
 	if err := a.store.DB().QueryRow(`SELECT COALESCE(avatar_path,''),COALESCE(avatar_content_type,''),COALESCE(avatar_sha256,''),COALESCE(avatar_size,0) FROM profiles WHERE user_id=?`, userID).Scan(&path, &contentType, &checksum, &size); err != nil {
@@ -374,6 +380,7 @@ func (a *API) GetProfileAvatar(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if checksum != "" {
 		w.Header().Set("ETag", `"`+checksum+`"`)
+		w.Header().Set("X-Avatar-SHA256", checksum)
 	}
 	http.ServeContent(w, r, filepath.Base(full), time.Time{}, file)
 }

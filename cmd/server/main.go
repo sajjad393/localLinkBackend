@@ -80,6 +80,8 @@ func main() {
 	mux.HandleFunc("PUT /api/v1/profile", api.UpdateProfile)
 	mux.HandleFunc("POST /api/v1/profile/avatar", api.UploadProfileAvatar)
 	mux.HandleFunc("GET /api/v1/profile/avatar", api.GetProfileAvatar)
+	mux.HandleFunc("DELETE /api/v1/profile/avatar", api.DeleteProfileAvatar)   // Bundle 204
+	mux.HandleFunc("GET /api/v1/directory/user/{id}/avatar", api.FriendAvatar) // Bundle 204
 	mux.HandleFunc("GET /api/v1/directory/phone", api.DirectoryByPhone)
 	mux.HandleFunc("GET /api/v1/directory/name", api.DirectoryByName)
 	mux.HandleFunc("GET /api/v1/directory/user/{id}", api.DirectoryByUserID)
