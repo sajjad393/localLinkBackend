@@ -351,7 +351,7 @@ LL.views = {};
       </section>`))
 
       parts.push(pollRegion('note', ui.note('Message review is switched on',
-        'The owner role can read message bodies in the Conversations module, and every conversation opened there is recorded in the audit log. Passwords, private keys, call audio, decrypted media and file contents stay out of this console.',
+        'The server keeps a message only until it is delivered (+7 days). The Owner can ask the phones for a chat in the Conversations module; every request and every read is written to the audit log. Passwords, private keys and call audio stay out of this console.',
  'i-lock')));
 
       el.innerHTML = parts.join('');
@@ -1457,11 +1457,20 @@ LL.views = {};
     // action in this console, so the server refuses every other role and writes
     // an audit entry each time a conversation is opened.
     roles: ['owner'],
+    // Bundle 221: progress of answers refreshes quietly while open.
+    async refresh(el) {
+      if (!el._conv221) return false;
+      await el._conv221.poll();
+      return true;
+    },
     async mount(el, ctx) {
+      el._conv221 = null;
       const scope = {
         mode: 'list', kind: '', a: '', b: '', groupId: '', groupName: '', memberCount: 0,
         participants: [], messages: [], cursor: '', hasMore: false, rows: [], error: '', loading: false,
         objectUrls: [],
+        // Bundle 221
+        requests: [], tab: 'all', shown: [], viewId: '', view: null, viewReq: null, sheet: null, del: null, menu: null, topMenu: false,
       };
 
       const root = document.createElement('div');
@@ -1631,51 +1640,343 @@ LL.views = {};
         }).finally(() => { button.disabled = false; });
       }
 
+      // ------------------------------------------------ Bundle 221: chats come from the phones
+      // The server keeps a message only until it is delivered (+7 days), so
+      // the list is who / how many / when (conv_index) and reading a chat
+      // means asking the phones in it. "N on server" still opens the old
+      // server view for what is left there.
       function auditNotice() {
-        return ui.note('Reading is recorded',
-          'The owner role can read message bodies on this server. Every conversation opened here is written to the audit log with your administrator name, the participants and the time.',
-          'i-audit');
+        return `<div class="info221">${ui.icon('i-info')}<span>The server keeps a message only until it is delivered (+7 days). To read a chat, ask the phones in it. Reading is recorded in the Audit log.</span></div>`;
+      }
+
+      // Display name first in the new list ("Sajjad & Sumaira").
+      const shownName = (p) => (p.name && p.name !== p.id ? p.name : (p.username || p.id || '\u2014'));
+      const ROUTE221 = { server: 'Server', direct: 'Wi-Fi Direct', wifi_direct: 'Wi-Fi Direct', mesh: 'Mesh', lan: 'Local Wi-Fi' };
+
+      function chatKey(c) {
+        if (!c || !c.kind) return '';
+        return c.kind === 'group' ? 'g:' + c.group_id : 'd:' + (c.devices || []).slice().sort().join(',');
+      }
+
+      function liveRequest(q) {
+        return q && q.action === 'get_chat' && !q.closed && q.state !== 'cancelled' && q.chat && q.chat.kind;
+      }
+
+      function requestFor(row) {
+        const ids = row.kind === 'group' ? [] : (row.participants || []).map((p) => p.id);
+        return scope.requests.filter((q) => liveRequest(q) && q.chat.kind === row.kind
+          && (row.kind === 'group'
+            ? q.chat.group_id === row.group_id
+            : ids.length === 2 && ids.every((id) => (q.chat.devices || []).indexOf(id) >= 0)))[0] || null;
+      }
+
+      function entries() {
+        const list = scope.rows.map((row) => ({ row, q: requestFor(row) }));
+        const seen = {};
+        list.forEach((e) => { if (e.q) seen[chatKey(e.q.chat)] = 1; });
+        // Requests for chats the server never saw (Wi-Fi Direct / mesh only).
+        scope.requests.forEach((q) => {
+          if (!liveRequest(q) || seen[chatKey(q.chat)]) return;
+          seen[chatKey(q.chat)] = 1;
+          list.push({ row: null, q });
+        });
+        return list;
+      }
+
+      function partsDone(q) { return q && num(q.of) > 0 && num(q.parts) >= num(q.of); }
+
+      function statusOf(q) {
+        if (!q) return '';
+        if (partsDone(q)) return ui.pill216('Ready', 'green');
+        if (num(q.parts) > 0) return ui.pill216(`${q.parts} of ${q.of} parts`, 'blue');
+        if (num(q.old_app) > 0) return ui.pill216('Pending \u00b7 old app', 'red');
+        return ui.pill216('Pending', 'orange');
+      }
+
+      function lastWhen(iso) {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return '\u2014';
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const hm = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+        if (d >= today) return 'Today ' + hm;
+        if (d >= new Date(today.getTime() - 86400000)) return 'Yesterday ' + time12(iso);
+        return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
       }
 
       function listPanel() {
-        if (!scope.rows.length) {
-          return ui.panel({
-            title: 'Conversations', subtitle: 'Nothing has been exchanged yet',
-            body: ui.emptyState({
-              icon: 'i-message',
-              title: 'No messages on this server yet',
-              message: 'Conversations appear here once devices start exchanging messages.',
-            }),
-          });
-        }
-        const total = scope.rows.reduce((sum, row) => sum + (row.message_count || 0), 0);
-        return ui.panel({
-          title: 'Conversations',
-          subtitle: 'Metadata only — opening one returns its messages and is recorded',
-          actions: `${ui.badge(`${scope.rows.length} thread(s)`, 'neutral')}${ui.badge(`${total} message(s)`, 'neutral')}`,
-          pad0: true,
-          body: `<div style="padding:16px">${ui.table({
-            columns: [
-              { label: 'Type' }, { label: 'People' }, { label: 'Messages', numeric: true },
-              { label: 'Last activity' }, { label: '' },
-            ],
-            rows: scope.rows.map((row) => {
-              const people = row.participants || [];
-              const attrs = row.kind === 'group'
-                ? `data-conversation-open data-kind="group" data-group="${ui.esc(row.group_id)}"`
-                : `data-conversation-open data-kind="direct" data-a="${ui.esc(people[0] ? people[0].id : '')}" data-b="${ui.esc(people[1] ? people[1].id : '')}"`;
-              return [
-                row.kind === 'group' ? ui.badge('Group', 'neutral') : ui.badge('Direct', 'neutral'),
-                ui.esc(threadTitle(row)),
-                ui.esc(fmt.number(row.message_count || 0)),
-                `<span class="subtle">${ui.esc(fmt.dateTime(row.last_message_at))}</span>`,
-                `<button class="btn btn-ghost btn-sm" ${attrs}>${ui.icon('i-chevron-right')}Open</button>`,
-              ];
-            }),
-            emptyTitle: 'No conversations',
-            emptyMessage: '',
-          })}</div>`,
+        const all = entries();
+        const kindOf = (e) => (e.row ? e.row.kind : e.q.chat.kind);
+        const priv = all.filter((e) => kindOf(e) !== 'group');
+        const groups = all.filter((e) => kindOf(e) === 'group');
+        const tab = scope.tab || 'all';
+        const shown = tab === 'private' ? priv : (tab === 'groups' ? groups : all);
+        scope.shown = shown;
+        const rows = shown.map((e, i) => {
+          const r = e.row;
+          const q = e.q;
+          let who; let sub; let kind; let avatars;
+          if (r && r.kind === 'group') {
+            kind = 'group';
+            who = r.group_name || r.group_id;
+            sub = `${fmt.number(r.member_count || 0)} members`;
+            avatars = ui.avatar216({ name: who, size: 40 });
+          } else if (r) {
+            kind = 'direct';
+            const people = r.participants || [];
+            who = people.map(shownName).join(' & ');
+            sub = people.map((p) => '@' + (p.username || p.name || p.id)).join(' \u00b7 ');
+            avatars = `<span class="pair221">${people.slice(0, 2).map((p) => ui.avatar216({ name: shownName(p), size: 28 })).join('')}</span>`;
+          } else {
+            kind = q.chat.kind;
+            who = q.label || 'Chat';
+            sub = 'not on the server list';
+            avatars = ui.avatar216({ name: who, size: 40 });
+          }
+          let count = '\u2014';
+          if (r) {
+            const people = r.participants || [];
+            const open = r.kind === 'group'
+              ? `data-conversation-open data-kind="group" data-group="${ui.esc(r.group_id)}"`
+              : `data-conversation-open data-kind="direct" data-a="${ui.esc(people[0] ? people[0].id : '')}" data-b="${ui.esc(people[1] ? people[1].id : '')}"`;
+            count = `<b>${ui.esc(fmt.number(r.message_count || 0))}</b>${num(r.on_server) > 0
+              ? `<button class="link221" type="button" ${open}>${ui.esc(fmt.number(r.on_server))} on server</button>`
+              : '<small class="subtle">0 on server</small>'}`;
+          }
+          let button;
+          if (!q) button = `<button class="btn btn-sm" type="button" data-conv221-ask="${i}">Request from phones</button>`;
+          else if (num(q.parts) > 0) button = `<button class="btn btn-primary btn-sm" type="button" data-conv221-open="${ui.esc(q.id)}">Open</button>`;
+          else button = `<button class="btn btn-sm" type="button" data-conv221-open="${ui.esc(q.id)}">View request</button>`;
+          return [
+            `<div class="p216">${avatars}<span class="p216-t"><b>${ui.esc(who)}</b><small>${ui.esc(sub)}</small></span></div>`,
+            ui.pill216(kind === 'group' ? 'Group' : 'Private', 'grey'),
+            `<div class="cnt221">${count}</div>`,
+            `<span class="subtle">${ui.esc(r ? lastWhen(r.last_message_at) : made220(q.made_at))}</span>`,
+            statusOf(q),
+            `<div class="act221">${button}</div>`,
+          ];
         });
+        return `<div class="top221">
+            ${ui.chips216([
+              { value: 'all', label: 'All ' + all.length },
+              { value: 'private', label: 'Private ' + priv.length },
+              { value: 'groups', label: 'Groups ' + groups.length },
+            ], tab, 'data-conv221-tab')}
+            <span class="hint221">Pick 2 people or a group (also chats the server never saw)</span>
+            <button class="btn btn-primary" type="button" data-conv221-new>New request</button>
+          </div>
+          ${ui.panel({
+            pad0: true,
+            body: rows.length
+              ? `<div style="padding:0 4px">${ui.table({
+                columns: [{ label: 'Chat' }, { label: 'Kind' }, { label: 'Messages' }, { label: 'Last message' }, { label: 'Status' }, { label: '' }],
+                rows,
+              })}</div>`
+              : '<div class="empty216">No chats on the server list yet. Use New request to ask the phones of any 2 people or a group.</div>',
+          })}`;
+      }
+
+      // ---------------------------------------------------------------- viewer
+      function dayLabel(iso) {
+        const d = new Date(iso);
+        return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      }
+
+      function rangeText(from, to) {
+        if (!from && !to) return 'Full chat';
+        return `${dayLabel(from + 'T12:00:00')} - ${dayLabel(to + 'T12:00:00')}`;
+      }
+
+      function delWhen(iso) {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return '';
+        const hm = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+        return `${dayLabel(iso)} ${hm}`;
+      }
+
+      function sideOf(m) {
+        const v = scope.view || {};
+        if (v.chat && v.chat.kind === 'group') return 'in';
+        if (m.sender && v.from_device && m.sender === v.from_device) return 'in';
+        if (m.sender_name && v.from_name && m.sender_name === v.from_name) return 'in';
+        return 'out';
+      }
+
+      function fileRequest(fileId) {
+        return scope.requests.filter((q) => q.action === 'get_file' && q.file_id === fileId && q.state !== 'cancelled' && !q.closed)[0] || null;
+      }
+
+      function att221(a, m) {
+        const isImage = /^image\//.test(String(a.type || ''));
+        const word = isImage ? 'photo' : 'file';
+        const thumb = a.thumb && /^[A-Za-z0-9+/=_-]+$/.test(a.thumb)
+          ? `<img class="th221" alt="${ui.esc(a.name || word)}" src="data:${a.thumb_type === 'image/png' ? 'image/png' : 'image/jpeg'};base64,${a.thumb}">`
+          : `<span class="th221 none">${ui.icon(isImage ? 'i-image' : 'i-file')}<small>${ui.esc(a.name || word)}</small></span>`;
+        const f = a.file_id ? fileRequest(a.file_id) : null;
+        let action;
+        if (a.file_gone) action = '<span class="gone221">File removed after 60 days \u00b7 thumbnail only</span>';
+        else if (partsDone(f)) action = `<button class="btn btn-sm" type="button" data-conv221-show="${ui.esc(f.id)}" data-image="${isImage ? '1' : ''}" data-name="${ui.esc(a.name || word)}">Show full ${word}</button>`;
+        else if (f) action = `<span class="subtle">${num(f.parts) ? `${f.parts} of ${f.of} parts` : 'Asked the phones \u00b7 waiting'}</span>`;
+        else if (a.file_id) action = `<button class="btn btn-sm" type="button" data-conv221-file="${ui.esc(a.file_id)}" data-mid="${ui.esc(m.id || '')}" data-name="${ui.esc(a.name || '')}">Get full ${word}</button>`;
+        else action = '';
+        return `<div class="att221">${thumb}${action}</div>`;
+      }
+
+      function bubble221(m, i) {
+        const side = sideOf(m);
+        const route = ROUTE221[m.route] ? `<span class="tag221">${ROUTE221[m.route]}</span>` : '';
+        const cls = ['chat-bubble', side, 'b221', m.deleted_at ? 'hid221' : '', m.outside ? 'margin221' : ''].filter(Boolean).join(' ');
+        const menu = scope.menu === i
+          ? `<div class="menu221" role="menu">
+              ${m.body ? `<button type="button" data-conv221-copy="${i}">Copy text</button>` : ''}
+              <button type="button" class="danger" data-conv221-delmsg="${i}">Delete completely</button>
+            </div>` : '';
+        return `<div class="chat-row ${side}"><div class="${cls}">
+            <div class="head221"><b class="who221">${ui.esc(m.sender_name || 'Phone')}</b>${route}<span class="t221">${ui.esc(time12(m.created_at))}</span>
+              <button class="kebab221" type="button" data-conv221-menu="${i}" aria-label="Message menu"><i></i><i></i><i></i></button></div>
+            ${m.body ? `<div class="chat-body">${ui.esc(m.body)}</div>` : ''}
+            ${(Array.isArray(m.attachments) ? m.attachments : []).map((a) => att221(a, m)).join('')}
+            ${m.deleted_at ? `<span class="del221">Deleted by user \u00b7 ${ui.esc(delWhen(m.deleted_at))}</span>` : ''}
+            ${menu}
+          </div></div>`;
+      }
+
+      function thread221(messages) {
+        let lastDay = '';
+        let inMargin = false;
+        return `<div class="chat-thread t221wrap">${messages.map((m, i) => {
+          let head = '';
+          const day = dayLabel(m.created_at);
+          if (day && day !== lastDay) { head += `<div class="day221"><span>${ui.esc(day)}</span></div>`; lastDay = day; }
+          if (m.outside && !inMargin) head += '<div class="chip221">Outside the dates (phone clock)</div>';
+          inMargin = !!m.outside;
+          return head + bubble221(m, i);
+        }).join('')}</div>`;
+      }
+
+      function progress221() {
+        const v = scope.view || {};
+        if (v.complete) return '';
+        if (num(v.of) > 0) {
+          const pct = Math.max(2, Math.min(100, Math.round(100 * num(v.parts) / num(v.of))));
+          return `<div class="prog221"><b>${v.parts} of ${v.of} parts \u00b7 the rest is on the way</b><span class="bar"><i style="width:${pct}%"></i></span></div>`;
+        }
+        const q = scope.viewReq || {};
+        return `<div class="prog221"><b>${num(q.old_app) > 0 ? 'Pending \u00b7 old app: the phones in this chat must update to 3.0.61 to answer' : 'Pending \u00b7 waiting for a phone in this chat'}</b><small>The request goes to every phone, friends or not. No time limit.</small></div>`;
+      }
+
+      function countFor(kind) {
+        const v = scope.view || {};
+        const msgs = Array.isArray(v.messages) ? v.messages.filter((m) => !m.outside) : [];
+        if (kind === 'message') return 1;
+        if (!v.complete || !msgs.length && !v.of) return null;
+        const covers = (fromDay) => !v.from || v.from <= fromDay;
+        if (kind === 'full') return v.from ? null : msgs.length;
+        if (kind === '7' || kind === '30') {
+          const days = Number(kind);
+          const cut = new Date(Date.now() - days * 86400000);
+          const cutDay = cut.toISOString().slice(0, 10);
+          if (!covers(cutDay)) return null;
+          return msgs.filter((m) => String(m.created_at) >= cut.toISOString()).length;
+        }
+        if (kind === 'dates') {
+          const d = scope.del || {};
+          if (!d.from || !d.to || !covers(d.from)) return null;
+          return msgs.filter((m) => { const day = String(m.created_at).slice(0, 10); return day >= d.from && day <= d.to; }).length;
+        }
+        return null;
+      }
+
+      function deletePanel() {
+        const d = scope.del;
+        const v = scope.view || {};
+        const devices = v.chat && Array.isArray(v.chat.devices) ? v.chat.devices.length : 0;
+        const options = [
+          d.msg != null ? { value: 'message', label: 'This message' } : null,
+          { value: 'full', label: 'Full chat' },
+          { value: '7', label: 'Last 7 days' },
+          { value: '30', label: 'Last 30 days' },
+          { value: 'dates', label: 'Choose dates' },
+        ].filter(Boolean);
+        const n = countFor(d.scope);
+        const button = n == null ? 'Delete completely' : `Delete ${fmt.number(n)} message${n === 1 ? '' : 's'} completely`;
+        return `<div class="del221p">
+          <div class="del221h"><span class="ic">${ui.icon('i-trash-user')}</span><b>Delete completely</b></div>
+          ${options.map((o) => {
+            const c = countFor(o.value);
+            return `<label class="radio221"><input type="radio" name="del221" value="${o.value}" ${d.scope === o.value ? 'checked' : ''} data-conv221-scope>
+              <span>${o.label}</span><small>${c == null ? 'count unknown' : fmt.number(c) + ' msg'}</small></label>${o.value === 'dates'
+                ? `<span class="dates221"><input type="date" aria-label="From" data-conv221-dfrom value="${ui.esc(d.from || '')}"><span>to</span><input type="date" aria-label="To" data-conv221-dto value="${ui.esc(d.to || '')}"></span>` : ''}`;
+          }).join('')}
+          <p class="subtle">Removed from every phone (${devices ? devices + ' phones' : 'all phones of the chat'}), also the copies users deleted. Can't be undone.${n == null && d.scope !== 'message' ? ' Count unknown \u2014 this copy does not cover it.' : ''}</p>
+          <div class="row221"><button class="btn" type="button" data-conv221-delx>Cancel</button>
+            <button class="btn btn-danger del221go" type="button" data-conv221-delgo>${ui.esc(button)}</button></div>
+        </div>`;
+      }
+
+      function viewerPanel() {
+        const v = scope.view || {};
+        const q = scope.viewReq || {};
+        const messages = Array.isArray(v.messages) ? v.messages : [];
+        const title = q.label || (v.chat && v.chat.kind === 'group' ? 'Group' : 'Chat');
+        const sub = [rangeText(v.from || q.from, v.to || q.to), v.from_name ? `from ${v.from_name}'s phone` : '', 'this copy is deleted 24 h after you read it'].filter(Boolean).join(' \u00b7 ');
+        const notes = [
+          v.trimmed ? 'Big chat: the phone left out the oldest thumbnails (5 MB limit).' : '',
+          num(v.broken) ? `${v.broken} part(s) could not be opened.` : '',
+        ].filter(Boolean).map((t) => `<div class="note221">${ui.esc(t)}</div>`).join('');
+        const top = scope.topMenu
+          ? `<div class="menu221 top" role="menu">
+              ${messages.length ? '<button type="button" class="danger" data-conv221-delopen>Delete completely\u2026</button>' : ''}
+              <button type="button" data-conv221-again>Ask the phones again</button>
+              ${q.state === 'pending' && !num(v.parts) ? '<button type="button" data-conv221-cancel>Cancel request</button>' : ''}
+            </div>` : '';
+        const body = messages.length
+          ? thread221(messages)
+          : `<div class="empty216">${num(v.parts) ? 'This part has no messages in the dates.' : 'No phone has answered yet.'}</div>`;
+        return `<div class="vhead221">
+            <button class="iconbtn221" type="button" data-conv221-back aria-label="Back">${ui.icon('i-chevron-left')}</button>
+            <div class="vt221"><b>${ui.esc(title)}</b><small>${ui.esc(sub)}</small></div>
+            ${num(v.parts) > 0 ? '<button class="btn" type="button" data-conv221-close>Close</button>' : ''}
+            <span class="topwrap221"><button class="iconbtn221 boxed" type="button" data-conv221-top aria-label="More"><span class="kebab221 on"><i></i><i></i><i></i></span></button>${top}</span>
+          </div>
+          <div class="viewer221 ${scope.del ? 'has-side' : ''}">
+            <div class="vmain221">${notes}${body}${progress221()}</div>
+            ${scope.del ? `<div class="vside221">${deletePanel()}</div>` : ''}
+          </div>`;
+      }
+
+      // ------------------------------------------------------- request sheet
+      function sheet221() {
+        const s = scope.sheet;
+        if (!s) return '';
+        const option = (list, value, label) => list.map((x) => `<option value="${ui.esc(x.id)}" ${x.id === value ? 'selected' : ''}>${ui.esc(label(x))}</option>`).join('');
+        const userLabel = (u) => (u.display_name ? `${u.display_name} (@${u.username})` : '@' + u.username);
+        let who;
+        if (s.fixed) {
+          who = `<div class="fixed221"><b>${ui.esc(s.fixed.label)}</b><small>${s.fixed.kind === 'group' ? 'Group' : 'Private chat'}</small></div>`;
+        } else if (s.loading) {
+          who = '<div class="skeleton w-60" style="height:18px"></div>';
+        } else {
+          who = `${ui.chips216([{ value: 'direct', label: 'Private chat' }, { value: 'group', label: 'Group' }], s.kind, 'data-conv221-kind')}
+            ${s.kind === 'group'
+              ? `<label class="field221">Group<select data-conv221-g><option value="">Pick a group</option>${option(s.groups, s.group, (g) => `${g.name} (${g.members} members)`)}</select></label>`
+              : `<label class="field221">Person 1<select data-conv221-a><option value="">Pick a person</option>${option(s.users, s.a, userLabel)}</select></label>
+                 <label class="field221">Person 2<select data-conv221-b><option value="">Pick a person</option>${option(s.users, s.b, userLabel)}</select></label>`}`;
+        }
+        return `<div class="sheet221-bg" data-conv221-sheetbg>
+          <div class="sheet221" role="dialog" aria-label="Request from phones">
+            <h3>Request from phones</h3>
+            ${who}
+            <div class="lab221">Which messages</div>
+            ${ui.chips216([
+              { value: 'full', label: 'Full chat' }, { value: '7', label: 'Last 7 days' },
+              { value: '30', label: 'Last 30 days' }, { value: 'dates', label: 'Choose dates' },
+            ], s.range, 'data-conv221-range')}
+            ${s.range === 'dates' ? `<div class="dates221 wide"><label>From<input type="date" data-conv221-from value="${ui.esc(s.from)}"></label><label>To<input type="date" data-conv221-to value="${ui.esc(s.to)}"></label></div>` : ''}
+            <p class="subtle">Every phone gets the request, friends or not. A phone in the chat sends its copy back in parts (also messages users deleted). One extra day on both sides. Pending until a phone is reached. Saved in the Audit log.</p>
+            <div class="row221"><button class="btn" type="button" data-conv221-sheetx>Cancel</button>
+              <button class="btn btn-primary" type="button" data-conv221-send ${s.sending ? 'disabled' : ''}>Send request</button></div>
+          </div>
+        </div>`;
       }
 
       function threadPanel() {
@@ -1706,34 +2007,171 @@ LL.views = {};
 
       function draw() {
         revokeMedia();
-        root.innerHTML = `<div class="section">
-          ${ui.sectionHead({
-            title: 'Conversations',
-            subtitle: 'Review the messages exchanged on this server',
-            icon: 'i-message',
-            actions: scope.mode === 'thread'
-              ? `<button class="btn btn-ghost btn-sm" data-conversation-back>${ui.icon('i-chevron-left')}All conversations</button>`
-              : ui.badge('Owner only', 'warning'),
-          })}
-          ${auditNotice()}
-          ${scope.loading
-            ? ui.skeletonPanel(4)
-            : (scope.error ? ui.panel({ body: ui.errorState(scope.error, 'conversations') })
-              : (scope.mode === 'thread' ? threadPanel() : listPanel()))}
+        let main;
+        if (scope.loading) main = ui.skeletonPanel(4);
+        else if (scope.error) main = ui.panel({ body: ui.errorState(scope.error, 'conversations') });
+        else if (scope.mode === 'thread') {
+          main = `<div class="vhead221"><button class="btn btn-ghost btn-sm" type="button" data-conversation-back>${ui.icon('i-chevron-left')}All conversations</button>
+            <div class="vt221"><b>Server copy</b><small>Only messages not yet delivered (+7 days) are still on the server</small></div></div>${threadPanel()}`;
+        } else if (scope.mode === 'viewer') main = viewerPanel();
+        else main = listPanel();
+        root.innerHTML = `<div class="section conv221">
+          ${scope.mode === 'viewer' ? '' : auditNotice()}
+          ${main}
+          ${sheet221()}
         </div>`;
         hydrateMedia();
       }
 
-      async function loadList() {
-        scope.loading = true;
-        scope.error = '';
-        draw();
-        const result = await settle(ctx.api('/api/v1/admin/conversations?limit=100'));
+      async function loadRequests() {
+        const result = await settle(ctx.api('/api/v1/admin/chat-requests'));
+        if (result.ok) scope.requests = Array.isArray(result.data.requests) ? result.data.requests : [];
+        return result;
+      }
+
+      async function loadList(quiet) {
+        if (!quiet) { scope.loading = true; scope.error = ''; draw(); }
+        const [result] = await Promise.all([settle(ctx.api('/api/v1/admin/conversations?limit=100')), loadRequests()]);
         scope.loading = false;
-        if (!result.ok) scope.error = result.error;
-        else scope.rows = Array.isArray(result.data.conversations) ? result.data.conversations : [];
+        if (!result.ok) { if (!quiet) scope.error = result.error; } else scope.rows = Array.isArray(result.data.conversations) ? result.data.conversations : [];
         draw();
       }
+
+      async function loadViewer(quiet) {
+        if (!quiet) { scope.loading = true; scope.error = ''; draw(); }
+        await loadRequests();
+        scope.viewReq = scope.requests.filter((q) => q.id === scope.viewId)[0] || scope.viewReq || {};
+        const result = await settle(ctx.api(`/api/v1/admin/chat-requests/${encodeURIComponent(scope.viewId)}/answer`));
+        scope.loading = false;
+        if (!result.ok) {
+          if (quiet) return;
+          ctx.toast(result.error || 'Could not open the answer', 'error');
+          scope.mode = 'list';
+          await loadList();
+          return;
+        }
+        scope.view = result.data || {};
+        draw();
+      }
+
+      function openViewer(id) {
+        scope.mode = 'viewer';
+        scope.viewId = id;
+        scope.view = null;
+        scope.viewReq = null;
+        scope.del = null;
+        scope.menu = null;
+        scope.topMenu = false;
+        loadViewer();
+      }
+
+      async function openSheet(fixed) {
+        scope.sheet = { fixed: fixed || null, kind: 'direct', a: '', b: '', group: '', range: 'full', from: '', to: '', users: [], groups: [], loading: !fixed, sending: false };
+        draw();
+        if (fixed) return;
+        const [users, groups] = await Promise.all([
+          settle(ctx.api('/api/v1/admin/users?limit=200')),
+          settle(ctx.api('/api/v1/admin/groups?limit=200')),
+        ]);
+        if (!scope.sheet) return;
+        scope.sheet.users = users.ok && Array.isArray(users.data.users) ? users.data.users : [];
+        scope.sheet.groups = groups.ok && Array.isArray(groups.data.groups) ? groups.data.groups : [];
+        scope.sheet.loading = false;
+        draw();
+      }
+
+      function chatBody(chat) {
+        if (!chat) return {};
+        if (chat.kind === 'group') return { kind: 'group', group_id: chat.group_id };
+        const ids = (chat.users && chat.users.length === 2) ? chat.users : (chat.devices || []);
+        return { kind: 'direct', user_a: ids[0] || '', user_b: ids[1] || '' };
+      }
+
+      async function sendSheet() {
+        const s = scope.sheet;
+        let body;
+        if (s.fixed) body = Object.assign({}, s.fixed.body);
+        else if (s.kind === 'group') body = { kind: 'group', group_id: s.group };
+        else body = { kind: 'direct', user_a: s.a, user_b: s.b };
+        if (!s.fixed && (s.kind === 'group' ? !s.group : (!s.a || !s.b))) { ctx.toast(s.kind === 'group' ? 'Pick a group' : 'Pick 2 people', 'error'); return; }
+        if (!s.fixed && s.kind !== 'group' && s.a === s.b) { ctx.toast('Pick 2 different people', 'error'); return; }
+        if (s.range === 'dates' && (!s.from || !s.to || s.from > s.to)) { ctx.toast('Pick the dates (from before to)', 'error'); return; }
+        body.range = s.range;
+        if (s.range === 'dates') { body.from = s.from; body.to = s.to; }
+        s.sending = true;
+        draw();
+        try {
+          const out = await ctx.api('/api/v1/admin/chat-requests', { method: 'POST', body });
+          ctx.toast(`Sent to all phones \u00b7 ${num(out && out.phones)} in the chat \u00b7 Pending until one is reached`, 'success');
+          scope.sheet = null;
+          await loadList(true);
+        } catch (err) {
+          s.sending = false;
+          ctx.toast(err.message || 'Could not send the request', 'error');
+          draw();
+        }
+      }
+
+      async function sendDelete() {
+        const d = scope.del;
+        const v = scope.view || {};
+        const body = chatBody(v.chat || (scope.viewReq || {}).chat);
+        if (!body.kind) { ctx.toast('This chat is not known on the server', 'error'); return; }
+        if (d.scope === 'message') {
+          const m = (v.messages || [])[d.msg];
+          if (!m) return;
+          body.scope = 'message';
+          body.ids = [m.id];
+        } else if (d.scope === 'full') body.scope = 'full';
+        else {
+          body.scope = 'range';
+          body.range = d.scope;
+          if (d.scope === 'dates') {
+            if (!d.from || !d.to || d.from > d.to) { ctx.toast('Pick the dates (from before to)', 'error'); return; }
+            body.from = d.from;
+            body.to = d.to;
+          }
+        }
+        try {
+          const out = await ctx.api('/api/v1/admin/purge', { method: 'POST', body });
+          ctx.toast(`Deleted ${num(out && out.removed_on_server)} on the server \u00b7 sent to ${num(out && out.need)} phones \u00b7 Pending until each phone confirms`, 'success');
+          // Hide what was deleted from this copy too.
+          const gone = (m) => {
+            if (body.scope === 'message') return body.ids.indexOf(m.id) >= 0;
+            if (body.scope === 'full') return true;
+            const day = String(m.created_at).slice(0, 10);
+            const from = body.range === 'dates' ? body.from : new Date(Date.now() - Number(body.range) * 86400000).toISOString().slice(0, 10);
+            const to = body.range === 'dates' ? body.to : new Date().toISOString().slice(0, 10);
+            return day >= from && day <= to;
+          };
+          v.messages = (v.messages || []).filter((m) => !gone(m));
+          scope.del = null;
+          draw();
+        } catch (err) {
+          ctx.toast(err.message || 'Could not delete', 'error');
+        }
+      }
+
+      async function showFile(button) {
+        const id = button.getAttribute('data-conv221-show');
+        const url = `/api/v1/admin/chat-requests/${encodeURIComponent(id)}/answer?download=1`;
+        if (button.getAttribute('data-image')) { openLightbox(url); return; }
+        button.setAttribute('data-chat-file', url);
+        button.setAttribute('data-chat-name', button.getAttribute('data-name') || 'file');
+        downloadAttachment(button);
+      }
+
+      // Poll: refresh progress quietly unless the Owner is in a sheet / menu.
+      el._conv221 = {
+        async poll() {
+          if (scope.sheet || scope.del || scope.menu != null || scope.topMenu || scope.loading) return;
+          if (scope.mode === 'list') await loadList(true);
+          else if (scope.mode === 'viewer') {
+            const waitingFile = scope.requests.some((q) => q.action === 'get_file' && q.parent === scope.viewId && !partsDone(q));
+            if (!(scope.view && scope.view.complete) || waitingFile) await loadViewer(true);
+          }
+        },
+      };
 
       function threadPath(cursor) {
         const base = scope.kind === 'group'
@@ -1792,8 +2230,109 @@ LL.views = {};
         draw();
       }
 
+      root.addEventListener('change', (event) => {
+        const t = event.target;
+        const s = scope.sheet;
+        if (s) {
+          if (t.matches('[data-conv221-a]')) s.a = t.value;
+          if (t.matches('[data-conv221-b]')) s.b = t.value;
+          if (t.matches('[data-conv221-g]')) s.group = t.value;
+          if (t.matches('[data-conv221-from]')) s.from = t.value;
+          if (t.matches('[data-conv221-to]')) s.to = t.value;
+        }
+        if (scope.del) {
+          if (t.matches('[data-conv221-scope]')) { scope.del.scope = t.value; draw(); }
+          if (t.matches('[data-conv221-dfrom]')) { scope.del.from = t.value; scope.del.scope = 'dates'; draw(); }
+          if (t.matches('[data-conv221-dto]')) { scope.del.to = t.value; scope.del.scope = 'dates'; draw(); }
+        }
+      });
+
       root.addEventListener('click', (event) => {
-        const open = event.target.closest('[data-conversation-open]');
+        const hit = (sel) => event.target.closest(sel);
+        let node;
+        // ---- request sheet
+        if (scope.sheet) {
+          if ((node = hit('[data-conv221-kind]'))) { scope.sheet.kind = node.getAttribute('data-conv221-kind'); draw(); return; }
+          if ((node = hit('[data-conv221-range]'))) { scope.sheet.range = node.getAttribute('data-conv221-range'); draw(); return; }
+          if (hit('[data-conv221-send]')) { sendSheet(); return; }
+          if (hit('[data-conv221-sheetx]') || event.target.matches('[data-conv221-sheetbg]')) { scope.sheet = null; draw(); return; }
+          return;
+        }
+        // ---- list
+        if ((node = hit('[data-conv221-tab]'))) { scope.tab = node.getAttribute('data-conv221-tab'); draw(); return; }
+        if (hit('[data-conv221-new]')) { openSheet(null); return; }
+        if ((node = hit('[data-conv221-ask]'))) {
+          const e = (scope.shown || [])[Number(node.getAttribute('data-conv221-ask'))];
+          if (!e || !e.row) return;
+          const r = e.row;
+          const people = r.participants || [];
+          openSheet(r.kind === 'group'
+            ? { kind: 'group', label: r.group_name || r.group_id, body: { kind: 'group', group_id: r.group_id } }
+            : { kind: 'direct', label: people.map(shownName).join(' & '), body: { kind: 'direct', user_a: people[0] ? people[0].id : '', user_b: people[1] ? people[1].id : '' } });
+          return;
+        }
+        if ((node = hit('[data-conv221-open]'))) { openViewer(node.getAttribute('data-conv221-open')); return; }
+        // ---- viewer
+        if (hit('[data-conv221-back]')) { scope.mode = 'list'; scope.view = null; scope.del = null; loadList(); return; }
+        if (hit('[data-conv221-close]')) {
+          ctx.api(`/api/v1/admin/chat-requests/${encodeURIComponent(scope.viewId)}/close`, { method: 'POST' })
+            .then(() => ctx.toast('Closed \u00b7 the copy on the server is deleted now', 'success'))
+            .catch((err) => ctx.toast(err.message || 'Could not close', 'error'))
+            .finally(() => { scope.mode = 'list'; scope.view = null; scope.del = null; loadList(); });
+          return;
+        }
+        if (hit('[data-conv221-top]')) { scope.topMenu = !scope.topMenu; scope.menu = null; draw(); return; }
+        if (hit('[data-conv221-delopen]')) { scope.topMenu = false; scope.del = { scope: 'full', msg: null, from: '', to: '' }; draw(); return; }
+        if (hit('[data-conv221-again]')) {
+          scope.topMenu = false;
+          const v = scope.view || {};
+          const q = scope.viewReq || {};
+          openSheet({ kind: (v.chat || q.chat || {}).kind || 'direct', label: q.label || 'Chat', body: chatBody(v.chat || q.chat) });
+          return;
+        }
+        if (hit('[data-conv221-cancel]')) {
+          scope.topMenu = false;
+          ctx.api(`/api/v1/admin/actions/${encodeURIComponent(scope.viewId)}/cancel`, { method: 'POST' })
+            .then(() => ctx.toast('Request cancelled', 'success'))
+            .catch((err) => ctx.toast(err.message || 'Could not cancel', 'error'))
+            .finally(() => { scope.mode = 'list'; loadList(); });
+          return;
+        }
+        if ((node = hit('[data-conv221-menu]'))) {
+          const i = Number(node.getAttribute('data-conv221-menu'));
+          scope.menu = scope.menu === i ? null : i;
+          scope.topMenu = false;
+          draw();
+          return;
+        }
+        if ((node = hit('[data-conv221-copy]'))) {
+          const m = ((scope.view || {}).messages || [])[Number(node.getAttribute('data-conv221-copy'))];
+          scope.menu = null;
+          draw();
+          if (m && navigator.clipboard) navigator.clipboard.writeText(String(m.body || '')).then(() => ctx.toast('Copied', 'success')).catch(() => {});
+          return;
+        }
+        if ((node = hit('[data-conv221-delmsg]'))) {
+          scope.del = { scope: 'message', msg: Number(node.getAttribute('data-conv221-delmsg')), from: '', to: '' };
+          scope.menu = null;
+          draw();
+          return;
+        }
+        if (hit('[data-conv221-delx]')) { scope.del = null; draw(); return; }
+        if (hit('[data-conv221-delgo]')) { sendDelete(); return; }
+        if ((node = hit('[data-conv221-file]'))) {
+          node.disabled = true;
+          ctx.api(`/api/v1/admin/chat-requests/${encodeURIComponent(scope.viewId)}/file`, {
+            method: 'POST',
+            body: { file_id: node.getAttribute('data-conv221-file'), message_id: node.getAttribute('data-mid'), name: node.getAttribute('data-name') },
+          }).then(() => { ctx.toast('Asked the phones for the full file \u00b7 Pending until one is reached', 'success'); return loadViewer(true); })
+            .catch((err) => { node.disabled = false; ctx.toast(err.message || 'Could not ask', 'error'); });
+          return;
+        }
+        if ((node = hit('[data-conv221-show]'))) { showFile(node); return; }
+        if ((scope.menu != null || scope.topMenu) && !hit('.menu221')) { scope.menu = null; scope.topMenu = false; draw(); return; }
+        // ---- old server view
+        const open = hit('[data-conversation-open]');
         if (open) {
           openThread({
             kind: open.getAttribute('data-kind') || 'direct',
@@ -1803,22 +2342,22 @@ LL.views = {};
           });
           return;
         }
-        if (event.target.closest('[data-conversation-back]')) {
+        if (hit('[data-conversation-back]')) {
           scope.mode = 'list';
           scope.error = '';
-          draw();
+          loadList();
           return;
         }
-        if (event.target.closest('[data-conversation-older]')) {
+        if (hit('[data-conversation-older]')) {
           loadOlder();
           return;
         }
-        const zoom = event.target.closest('[data-chat-zoom]');
+        const zoom = hit('[data-chat-zoom]');
         if (zoom) {
           openLightbox(zoom.getAttribute('data-chat-zoom'));
           return;
         }
-        const file = event.target.closest('[data-chat-file]');
+        const file = hit('[data-chat-file]');
         if (file) {
           downloadAttachment(file);
         }
@@ -1842,7 +2381,7 @@ LL.views = {};
         <div class="section">
           ${ui.sectionHead({ title: 'Privacy & access', subtitle: 'What the console may read, and what remains private', icon: 'i-privacy' })}
           ${ui.note('Message review is switched on',
-            'Message bodies are stored as users write them, and the owner role can read them in the Conversations module. Every conversation opened there is written to the audit log. Passwords, private keys, call audio, decrypted media and file contents remain unexposed.',
+            'The server keeps a message only until it is delivered (+7 days). The Owner can ask the phones for a chat in the Conversations module (also messages users deleted); it is written to the audit log, and the copy on the server is deleted 24 h after it is first read. Users are not told. Passwords, private keys and call audio remain unexposed.',
             'i-lock')}
           ${ui.panel({
             title: 'What this console can read',
@@ -1939,7 +2478,28 @@ LL.views = {};
   const ACTION_WORDS_220 = {
     block: 'Block', unblock: 'Unblock', off: 'Off (account closed)', active: 'Active again',
     sign_out: 'Sign out', remove_phone: 'Remove phone', rename_phone: 'Rename phone',
+    get_chat: 'Get chat', get_file: 'Get full photo', delete_completely: 'Delete completely', // Bundle 221
   };
+  // Bundle 221: chat actions show their words ("Last 7 days") and parts.
+  const CHAT_ACTIONS_221 = { get_chat: 1, get_file: 1, delete_completely: 1 };
+  function chatSub221(a) {
+    if (!CHAT_ACTIONS_221[a.action]) return '';
+    const d = String(a.detail || '');
+    const i = d.indexOf('\u00b7 ');
+    return i >= 0 ? d.slice(i + 2) : '';
+  }
+  function chatStatus221(a, req) {
+    if (!req || (a.action !== 'get_chat' && a.action !== 'get_file') || a.state === 'cancelled') return null;
+    const of = num(req.of);
+    const parts = num(req.parts);
+    if (req.closed) return { pill: ui.pill216('Closed', 'grey'), sub: 'copy deleted from the server' };
+    if (of > 0 && parts >= of) return { pill: ui.pill216('Ready', 'green'), sub: (req.from_name ? 'from ' + req.from_name + "'s phone \u00b7 " : '') + 'open it in Conversations' };
+    if (parts > 0) {
+      const pct = Math.max(2, Math.min(100, Math.round(100 * parts / of)));
+      return { pill: ui.pill216(parts + ' of ' + of + ' parts', 'blue') + `<span class="bar221"><i style="width:${pct}%"></i></span>`, sub: 'the rest is on the way' };
+    }
+    return null;
+  }
   const ACTION_PERM_220 = {
     block: 'manageUsers', unblock: 'manageUsers', off: 'manageUsers', active: 'manageUsers',
     wifi_rule: 'manageNetworkPolicy', sign_out: 'manageSessions', remove_phone: 'manageDevices',
@@ -2021,18 +2581,24 @@ LL.views = {};
       const result = await settle(ctx.api('/api/v1/admin/actions?state=all'));
       if (!result.ok) { el.innerHTML = ui.panel({ title: 'Admin actions', body: ui.errorState(result.error, 'actions') }); return; }
       const all = Array.isArray(result.data.actions) ? result.data.actions : [];
+      const chatReqs = {};
+      if (ctx.role === 'owner' && all.some((a) => CHAT_ACTIONS_221[a.action])) {
+        const r221 = await settle(ctx.api('/api/v1/admin/chat-requests'));
+        if (r221.ok && Array.isArray(r221.data.requests)) r221.data.requests.forEach((q) => { chatReqs[q.id] = q; });
+      }
       const isDone = (a) => a.state === 'done' || a.state === 'replaced';
       const pending = all.filter((a) => a.state === 'pending' && a.action !== 'version_rule');
       const finished = all.filter(isDone);
       const tab = ctx.state.filters.actions220 || 'all';
       const list = tab === 'pending' ? pending : (tab === 'done' ? finished : all);
       const rows = list.map((a) => {
-        const st = status220(a);
+        const st = chatStatus221(a, chatReqs[a.id]) || status220(a);
+        const sub221 = chatSub221(a);
         const perm = ACTION_PERM_220[a.action];
         const canCancel = a.state === 'pending' && perm && ctx.can(perm) && (a.action !== 'admin_badge' && a.action !== 'version_rule' || ctx.role === 'owner');
         const by = (a.made_by || 'admin') + (a.offline ? ' (offline)' : ' (web)');
         return [
-          `<div class="act220-t"><b>${ui.esc(title220(a))}</b></div>`,
+          `<div class="act220-t"><b>${ui.esc(title220(a))}</b>${sub221 ? `<small>${ui.esc(sub221)}</small>` : ''}</div>`,
           `<span>${ui.esc(a.label || '\u2014')}</span>`,
           `<div class="act220-s">${st.pill}${st.sub ? `<small>${ui.esc(st.sub)}</small>` : ''}</div>`,
           `<span class="subtle">${ui.esc(made220(a.made_at) + ' \u00b7 ' + by)}</span>`,

@@ -1253,6 +1253,7 @@
       refreshSummary();
       if (state.view === 'dashboard') mountView('dashboard', { quiet: true, refresh: true });
       if (state.view === 'actions') mountView('actions', { quiet: true, refresh: true }); // Bundle 220
+      if (state.view === 'conversations') mountView('conversations', { quiet: true, refresh: true }); // Bundle 221
     }, pollIntervalMs());
   }
 

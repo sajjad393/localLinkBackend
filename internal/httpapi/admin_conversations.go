@@ -43,6 +43,7 @@ type conversationSummary struct {
 	MemberCount   int                       `json:"member_count,omitempty"`
 	MessageCount  int                       `json:"message_count"`
 	LastMessageAt string                    `json:"last_message_at"`
+	OnServer      int                       `json:"on_server"` // bundle 221: still on the server
 }
 
 type conversationMessage struct {
@@ -191,19 +192,16 @@ func (a *API) AdminConversations(w http.ResponseWriter, r *http.Request) {
 	}
 	args = append(args, params.Limit+1)
 	rows, err := a.store.DB().Query(`
-SELECT kind,cid,user_a,user_b,group_id,group_name,message_count,last_at FROM (
-  SELECT 'direct' AS kind,
-         CASE WHEN sender_id < recipient_id THEN sender_id ELSE recipient_id END || '|' ||
-         CASE WHEN sender_id < recipient_id THEN recipient_id ELSE sender_id END AS cid,
-         CASE WHEN sender_id < recipient_id THEN sender_id ELSE recipient_id END AS user_a,
-         CASE WHEN sender_id < recipient_id THEN recipient_id ELSE sender_id END AS user_b,
-         '' AS group_id, '' AS group_name,
-         COUNT(*) AS message_count,
-         MAX(created_at) AS last_at
-  FROM messages GROUP BY cid
+SELECT kind,cid,user_a,user_b,group_id,group_name,message_count,last_at,on_server FROM (
+  SELECT 'direct' AS kind, ci.a || '|' || ci.b AS cid, ci.a AS user_a, ci.b AS user_b,
+         '' AS group_id, '' AS group_name, ci.count AS message_count, ci.last_at AS last_at,
+         (SELECT COUNT(*) FROM messages m WHERE (m.sender_id=ci.a AND m.recipient_id=ci.b)
+                                            OR (m.sender_id=ci.b AND m.recipient_id=ci.a)) AS on_server
+  FROM conv_index ci WHERE ci.kind='direct'
   UNION ALL
-  SELECT 'group', g.id, '', '', g.id, COALESCE(g.name,''), COUNT(*), MAX(gm.created_at)
-  FROM group_messages gm JOIN groups g ON g.id = gm.group_id GROUP BY g.id
+  SELECT 'group', g.id, '', '', g.id, COALESCE(g.name,''), ci.count, ci.last_at,
+         (SELECT COUNT(*) FROM group_messages gm WHERE gm.group_id=g.id)
+  FROM conv_index ci JOIN groups g ON g.id = ci.group_id WHERE ci.kind='group'
 )`+where+` ORDER BY last_at DESC, cid DESC LIMIT ?`, args...)
 	if err != nil {
 		writeError(w, 500, "failed to list conversations")
@@ -215,6 +213,7 @@ SELECT kind,cid,user_a,user_b,group_id,group_name,message_count,last_at FROM (
 		kind, cid, userA, userB, groupID, groupName string
 		count                                       int
 		lastAt                                      string
+		onServer                                    int
 	}
 	raw := make([]rawConversation, 0, params.Limit+1)
 	deviceIDs := make([]string, 0, 8)
@@ -223,7 +222,7 @@ SELECT kind,cid,user_a,user_b,group_id,group_name,message_count,last_at FROM (
 	seenGroup := map[string]bool{}
 	for rows.Next() {
 		var c rawConversation
-		if err := rows.Scan(&c.kind, &c.cid, &c.userA, &c.userB, &c.groupID, &c.groupName, &c.count, &c.lastAt); err != nil {
+		if err := rows.Scan(&c.kind, &c.cid, &c.userA, &c.userB, &c.groupID, &c.groupName, &c.count, &c.lastAt, &c.onServer); err != nil {
 			writeError(w, 500, "failed to read conversation")
 			return
 		}
@@ -277,6 +276,7 @@ SELECT kind,cid,user_a,user_b,group_id,group_name,message_count,last_at FROM (
 			Kind:          c.kind,
 			MessageCount:  c.count,
 			LastMessageAt: c.lastAt,
+			OnServer:      c.onServer,
 		}
 		if c.kind == "group" {
 			summary.GroupID = c.groupID

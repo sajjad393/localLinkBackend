@@ -156,6 +156,15 @@ func main() {
 	mux.HandleFunc("POST /api/v1/admin-actions/mine", api.AdminActionsMine)
 	mux.HandleFunc("GET /api/v1/admin/actions", api.AdminActionsList)
 	mux.HandleFunc("POST /api/v1/admin/actions/{id}/cancel", api.AdminActionCancel)
+	// Bundle 221: the Owner gets chats from the phones; delete completely.
+	mux.HandleFunc("POST /api/v1/admin/chat-requests", api.AdminChatRequestCreate)
+	mux.HandleFunc("GET /api/v1/admin/chat-requests", api.AdminChatRequestList)
+	mux.HandleFunc("GET /api/v1/admin/chat-requests/{id}/answer", api.AdminChatRequestAnswer)
+	mux.HandleFunc("POST /api/v1/admin/chat-requests/{id}/close", api.AdminChatRequestClose)
+	mux.HandleFunc("POST /api/v1/admin/chat-requests/{id}/file", api.AdminChatRequestFile)
+	mux.HandleFunc("POST /api/v1/admin/purge", api.AdminPurge)
+	mux.HandleFunc("POST /api/v1/admin-actions/answers", api.AdminActionAnswers)
+	mux.HandleFunc("POST /api/v1/admin-actions/answers/fetch", api.AdminActionAnswersFetch)
 	// Bundle 213: minimum app version.
 	mux.HandleFunc("GET /api/v1/version-rule", api.VersionRule)
 	mux.HandleFunc("POST /api/v1/version-rule/sync", api.VersionRuleSync)
@@ -230,6 +239,10 @@ func main() {
 		} else if removed > 0 {
 			log.Printf("attachment cleanup removed %d orphaned files", removed)
 		}
+		// Bundle 221: the server keeps a message only until delivered (+7 days).
+		if _, _, err := api.PostmanTick(time.Now()); err != nil {
+			log.Printf("postman cleanup error: %v", err)
+		}
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
 		for {
@@ -245,6 +258,9 @@ func main() {
 					log.Printf("attachment cleanup error: %v", err)
 				} else if removed > 0 {
 					log.Printf("attachment cleanup removed %d orphaned files", removed)
+				}
+				if _, _, err := api.PostmanTick(time.Now()); err != nil {
+					log.Printf("postman cleanup error: %v", err)
 				}
 			case <-orphanStop:
 				return

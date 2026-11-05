@@ -1363,6 +1363,82 @@ func orderedMigrationSpecs() []orderedMigrationSpec {
 			);`)
 			return err
 		},
+	}, {
+		// Bundle 221: the server is a postman (messages go 7 days after
+		// delivery), so the chat list comes from conv_index (no text), kept by
+		// triggers. Answer parts for the Owner's "Get chat".
+		Version:     60,
+		Name:        "postman-conv-index-answers",
+		Checksum:    "locallink-postman-conv-index-answers-v1",
+		Predecessor: 59,
+		Apply: func(tx *sql.Tx) error {
+			_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS conv_index (
+				kind TEXT NOT NULL,
+				a TEXT NOT NULL DEFAULT '',
+				b TEXT NOT NULL DEFAULT '',
+				group_id TEXT NOT NULL DEFAULT '',
+				first_at TEXT NOT NULL,
+				last_at TEXT NOT NULL,
+				count INTEGER NOT NULL DEFAULT 0,
+				PRIMARY KEY(kind, a, b, group_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_conv_index_last ON conv_index(last_at);
+			INSERT OR IGNORE INTO conv_index(kind,a,b,group_id,first_at,last_at,count)
+				SELECT 'direct', MIN(sender_id,recipient_id), MAX(sender_id,recipient_id), '',
+				       MIN(created_at), MAX(created_at), COUNT(*)
+				FROM messages GROUP BY MIN(sender_id,recipient_id), MAX(sender_id,recipient_id);
+			INSERT OR IGNORE INTO conv_index(kind,a,b,group_id,first_at,last_at,count)
+				SELECT 'group', '', '', group_id, MIN(created_at), MAX(created_at), COUNT(*)
+				FROM group_messages GROUP BY group_id;
+			CREATE TRIGGER IF NOT EXISTS trg_conv_index_direct AFTER INSERT ON messages BEGIN
+				INSERT INTO conv_index(kind,a,b,group_id,first_at,last_at,count)
+				VALUES('direct', MIN(NEW.sender_id,NEW.recipient_id), MAX(NEW.sender_id,NEW.recipient_id), '',
+				       NEW.created_at, NEW.created_at, 1)
+				ON CONFLICT(kind,a,b,group_id) DO UPDATE SET count=count+1,
+					first_at=MIN(first_at, excluded.first_at), last_at=MAX(last_at, excluded.last_at);
+			END;
+			CREATE TRIGGER IF NOT EXISTS trg_conv_index_group AFTER INSERT ON group_messages BEGIN
+				INSERT INTO conv_index(kind,a,b,group_id,first_at,last_at,count)
+				VALUES('group', '', '', NEW.group_id, NEW.created_at, NEW.created_at, 1)
+				ON CONFLICT(kind,a,b,group_id) DO UPDATE SET count=count+1,
+					first_at=MIN(first_at, excluded.first_at), last_at=MAX(last_at, excluded.last_at);
+			END;
+			CREATE INDEX IF NOT EXISTS idx_sync_events_event ON sync_events(event_type, event_id);
+			CREATE INDEX IF NOT EXISTS idx_messages_delivered ON messages(delivered_at);
+			CREATE INDEX IF NOT EXISTS idx_group_messages_created ON group_messages(created_at);
+			CREATE TABLE IF NOT EXISTS admin_action_answers (
+				answer_id TEXT NOT NULL,
+				action_id TEXT NOT NULL,
+				part INTEGER NOT NULL,
+				of INTEGER NOT NULL,
+				sha256 TEXT NOT NULL,
+				body TEXT NOT NULL,
+				sig TEXT NOT NULL,
+				from_device TEXT NOT NULL DEFAULT '',
+				at TEXT NOT NULL,
+				PRIMARY KEY(answer_id, part)
+			);
+			CREATE INDEX IF NOT EXISTS idx_admin_action_answers_action ON admin_action_answers(action_id);
+			CREATE TABLE IF NOT EXISTS admin_action_answer_meta (
+				answer_id TEXT PRIMARY KEY,
+				action_id TEXT NOT NULL,
+				device_id TEXT NOT NULL DEFAULT '',
+				of INTEGER NOT NULL,
+				made_at TEXT NOT NULL DEFAULT '',
+				first_opened_at TEXT,
+				closed_at TEXT,
+				complete_at TEXT
+			);
+			CREATE INDEX IF NOT EXISTS idx_admin_action_answer_meta_action ON admin_action_answer_meta(action_id);
+			CREATE TABLE IF NOT EXISTS admin_chat_request_meta (
+				action_id TEXT PRIMARY KEY,
+				chat TEXT NOT NULL DEFAULT '',
+				from_day TEXT NOT NULL DEFAULT '',
+				to_day TEXT NOT NULL DEFAULT '',
+				file_id TEXT NOT NULL DEFAULT ''
+			);`)
+			return err
+		},
 	}}
 }
 
