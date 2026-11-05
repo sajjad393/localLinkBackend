@@ -309,6 +309,42 @@ window.LL = window.LL || {};
     return html;
   }
 
+  // Bundle 219: shimmer shaped like the page that is loading (refresh and
+  // page switch). Unknown pages keep the plain panel.
+  const LIST219 = ['users', 'devices', 'sessions', 'audit', 'security', 'recovery'];
+  function bootSkeleton219(viewId) {
+    const sk = (cls) => `<span class="skeleton ${cls || ''}"></span>`;
+    const row = (cells) => `<div class="sk219-row">${sk('sk219-circle')}<div class="sk219-lines">${sk()}${sk()}</div>${cells}</div>`;
+    if (viewId === 'map') {
+      return `<div class="sk219 sk219-page-map" aria-busy="true">
+        <div class="sk219-chips">${sk('sk219-chip')}${sk('sk219-chip wide')}</div>
+        ${sk('sk219-map')}
+        <div class="sk219-legend">${sk()}${sk()}</div>
+        <section class="sk219-panel">${sk('h-lg w-40')}${row(sk('sk219-pill'))}${row(sk('sk219-pill'))}</section>
+      </div>`;
+    }
+    if (viewId === 'dashboard') {
+      return `<div class="sk219 sk219-page-dashboard" aria-busy="true">
+        <div class="grid grid-metrics">${skeletonCards(4)}</div>
+        <section class="sk219-panel">${sk('h-lg w-40')}${sk('sk219-chart')}</section>
+        <section class="sk219-panel">${sk('h-lg w-40')}${sk()}${sk('w-60')}${sk()}${sk('w-60')}</section>
+      </div>`;
+    }
+    if (LIST219.indexOf(viewId) >= 0) {
+      const cells = sk('sk219-cell') + sk('sk219-cell') + sk('sk219-cell') + sk('sk219-pill');
+      let rows = '';
+      for (let i = 0; i < 5; i += 1) rows += row(cells);
+      return `<div class="sk219 sk219-page-list" aria-busy="true">
+        <div class="sk219-search">${sk()}${sk()}</div>
+        <section class="sk219-panel sk219-list">
+          <div class="sk219-head">${sk()}${sk()}${sk()}${sk()}</div>
+          ${rows}
+        </section>
+      </div>`;
+    }
+    return skeletonPanel(5);
+  }
+
   function segmented(options, value, attribute) {
     const attr = attribute || 'data-segment';
     return `<div class="segmented" role="group">${options.map((o) =>
@@ -476,7 +512,7 @@ window.LL = window.LL || {};
   LL.ui = {
     esc, icon, badge, statusBadge, severityBadge, statusInfo, severityTone, severityIcon, token,
     panel, sectionHead, metricCard, statRow, headline, table, timeline, notificationItem,
-    emptyState, errorState, skeletonPanel, skeletonCards, segmented, healthRow, quickAction, note, filterBar,
+    emptyState, errorState, skeletonPanel, skeletonCards, bootSkeleton219, segmented, healthRow, quickAction, note, filterBar,
     crown216, mix217, avatar216, person216, pill216, chips216, when216, initials216, TONES_216, LEVELS_216, LINKS_216,
   };
 

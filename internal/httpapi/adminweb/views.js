@@ -115,7 +115,7 @@ LL.views = {};
       const range = ctx.state.analyticsRange || '24h';
       const longRange = !!LONG_RANGES[range];
 
-      el.innerHTML = `<div class="section">${ui.skeletonCards(8)}</div>`;
+      el.innerHTML = ui.bootSkeleton219('dashboard'); // Bundle 219
 
       const [analytics, health, security, activity, summary, network, settings] = await Promise.all([
         settle(ctx.api('/api/v1/admin/analytics?range=' + encodeURIComponent(range))),
@@ -487,7 +487,7 @@ LL.views = {};
       const host = document.getElementById('modal-host');
       if (host && host.querySelector('.side216')) host.innerHTML = '';
       const query = ctx.state.filters.users || { search: '', status: '', admin: '' };
-      el.innerHTML = ui.skeletonPanel(6);
+      el.innerHTML = ui.bootSkeleton219('users'); // Bundle 219
       const result = await settle(ctx.api('/api/v1/admin/users?limit=200'));
       if (!result.ok) { el.innerHTML = ui.panel({ title: 'Users', body: ui.errorState(result.error, 'users') }); return; }
 
@@ -553,6 +553,12 @@ LL.views = {};
 
   // W5: the side panel. Buttons reuse the shell handlers (data-user-status,
   // data-user-admin with data-admin-mode="make" / "remove" / "level").
+  // Bundle 218: date only ("5 Nov 2026") for the "Joined from offline" tag.
+  function joinedDate218(iso) {
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
   async function manage216(u, ctx) {
     const host = document.getElementById('modal-host');
     if (!host) return;
@@ -591,6 +597,7 @@ LL.views = {};
         </div>
         <div class="side216-person">
           ${ui.person216({ userId: u.id, name, sub: '@' + (u.username || ''), hasAvatar: !!u.has_avatar, admin: !!u.admin_role, blocked: u.status === 'suspended', size: 48 })}
+          ${u.joined_offline_at ? `<span class="tag218">Joined from offline \u00b7 ${ui.esc(joinedDate218(u.joined_offline_at))}</span>` : ''}
         </div>
         <h3>Status</h3>${['active', 'suspended', 'disabled'].map(statusCard).join('')}
         <h3>Admin level</h3>${levels.map(levelCard).join('')}
@@ -625,7 +632,7 @@ LL.views = {};
     navCount: 'devices',
     async mount(el, ctx) {
       const query = ctx.state.filters.devices || { search: '', presence: '' };
-      el.innerHTML = ui.skeletonPanel(6);
+      el.innerHTML = ui.bootSkeleton219('devices'); // Bundle 219
       const [result, map] = await Promise.all([settle(ctx.api('/api/v1/admin/devices?limit=200')), people216(ctx)]);
       if (!result.ok) { el.innerHTML = ui.panel({ title: 'Devices', body: ui.errorState(result.error, 'devices') }); return; }
       const all = Array.isArray(result.data.devices) ? result.data.devices : [];
@@ -683,7 +690,7 @@ LL.views = {};
     group: 'People',
     navCount: 'active_sessions',
     async mount(el, ctx) {
-      el.innerHTML = ui.skeletonPanel(5);
+      el.innerHTML = ui.bootSkeleton219('sessions'); // Bundle 219
       const [userSessions, adminSessions, map] = await Promise.all([
         settle(ctx.api('/api/v1/admin/sessions?limit=200')),
         settle(ctx.api('/api/v1/admin/admin-sessions')),
@@ -903,7 +910,7 @@ LL.views = {};
     icon: 'i-shield',
     group: 'Safety',
     async mount(el, ctx) {
-      el.innerHTML = ui.skeletonPanel(6);
+      el.innerHTML = ui.bootSkeleton219('security'); // Bundle 219
       const [summary, events, settings] = await Promise.all([
         settle(ctx.api('/api/v1/admin/security-summary')),
         settle(ctx.api('/api/v1/admin/security-events?limit=200')),
@@ -980,7 +987,7 @@ LL.views = {};
     async mount(el, ctx) {
       const query = ctx.state.filters.audit || { search: '' };
       const kind = query.kind || '';
-      el.innerHTML = ui.skeletonPanel(6);
+      el.innerHTML = ui.bootSkeleton219('audit'); // Bundle 219
       const result = await settle(ctx.api('/api/v1/admin/logs?limit=200'));
       const list = result.ok && Array.isArray(result.data.logs) ? result.data.logs : [];
       const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -1023,7 +1030,7 @@ LL.views = {};
     icon: 'i-restore',
     group: 'Safety',
     async mount(el, ctx) {
-      el.innerHTML = ui.skeletonPanel(5);
+      el.innerHTML = ui.bootSkeleton219('recovery'); // Bundle 219
       const [result, map] = await Promise.all([settle(ctx.api('/api/v1/admin/recovery-requests?limit=200')), people216(ctx)]);
       const list = result.ok && Array.isArray(result.data.requests || result.data.recovery_requests)
         ? (result.data.requests || result.data.recovery_requests) : [];
@@ -1132,7 +1139,7 @@ LL.views = {};
     isNew: true,
     async refresh(el, ctx) { await this.mount(el, ctx, true); return true; },
     async mount(el, ctx, quiet) {
-      if (!quiet) el.innerHTML = ui.skeletonPanel(6);
+      if (!quiet) el.innerHTML = ui.bootSkeleton219('map'); // Bundle 219
       const result = await settle(ctx.api('/api/v1/admin/link-map'));
       if (!result.ok) { el.innerHTML = ui.panel({ title: 'Map', body: ui.errorState(result.error, 'map') }); return; }
       const nodes = Array.isArray(result.data.nodes) ? result.data.nodes : [];

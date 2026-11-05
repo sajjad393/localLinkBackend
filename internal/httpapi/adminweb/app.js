@@ -65,7 +65,7 @@
       headers['Content-Type'] = 'application/json';
       body = JSON.stringify(body);
     }
-    const response = await fetch(path, { method: opts.method || 'GET', headers, body });
+    const response = await fetch(path, { method: opts.method || 'GET', headers, body, signal: opts.signal });
     if (response.status === 401) {
       handleExpiry();
       throw new Error('Your admin session expired. Sign in again.');
@@ -87,7 +87,9 @@
     }
     if (!response.ok) {
       const message = (data && (data.error || data.message)) || `Request failed (${response.status})`;
-      throw new Error(message);
+      const failure = new Error(message);
+      failure.status = response.status; // Bundle 219: boot tells 5xx (retry) from other errors.
+      throw failure;
     }
     return data;
   }
@@ -138,17 +140,18 @@
       return;
     }
     const seconds = Math.ceil((state.rateLimitedUntil - Date.now()) / 1000);
-    const text = `The server is throttling admin requests. Showing the last data it returned; retrying in ${seconds}s.`;
+    // Bundle 219 (mock web03): same bar as "Can't reach the server"; the login is kept.
+    const text = `Trying again in ${seconds} s…`;
     if (existing) {
-      existing.querySelector('span').textContent = text;
+      existing.querySelector('.bar219-text span').textContent = text;
       return;
     }
     const banner = document.createElement('div');
     banner.id = 'rate-limit-banner';
-    banner.className = 'headline headline-warning';
-    banner.style.margin = '0 0 16px';
-    banner.innerHTML = ui.icon('i-alert') + '<span></span>';
-    banner.querySelector('span').textContent = text;
+    banner.className = 'bar219';
+    banner.setAttribute('role', 'status');
+    banner.innerHTML = ui.icon('i-pulse') + '<div class="bar219-text"><strong>Server is busy</strong><span></span></div>';
+    banner.querySelector('.bar219-text span').textContent = text;
     const content = document.getElementById('view');
     content.parentElement.insertBefore(banner, content);
   }
@@ -608,7 +611,7 @@
     }
 
     const previous = target.innerHTML;
-    if (!opts.quiet) target.innerHTML = ui.skeletonPanel(5);
+    if (!opts.quiet) target.innerHTML = ui.bootSkeleton219(viewId);
     if (rateLimited()) {
       renderRateLimitBanner();
       if (opts.quiet && previous) target.innerHTML = previous;
@@ -624,6 +627,13 @@
         if (previous && previous.trim()) target.innerHTML = previous;
         renderRateLimitBanner();
         scheduleRateLimitRecovery();
+        return;
+      }
+      if (state.booting219 && unreachable219(err)) {
+        // Bundle 219: right after a refresh, a dropped connection keeps the
+        // shimmer and the retry bar instead of a red error panel.
+        target.innerHTML = ui.bootSkeleton219(viewId);
+        serverUnreachable219();
         return;
       }
       target.innerHTML = ui.panel({ body: ui.errorState(err.message, state.view) });
@@ -662,13 +672,24 @@
 
   // -------------------------------------------------------------------- auth
   function showLogin() {
+    $('boot219').classList.add('hidden');
+    hideServerBar219();
     $('auth').classList.remove('hidden');
     $('app').classList.add('hidden');
     const username = $('username');
     if (username) username.focus();
   }
 
-  function showApp() {
+  // Bundle 219: the stored start page (falls back to the dashboard).
+  function startView219() {
+    const stored = localStorage.getItem('locallink_admin_view');
+    return stored && LL.views[stored] ? stored : 'dashboard';
+  }
+
+  // Bundle 219: paint the real top bar, sidebar and titles from the saved
+  // login at once, before the server answers (no login page flash).
+  function paintShell219(start) {
+    $('boot219').classList.add('hidden');
     $('auth').classList.add('hidden');
     $('app').classList.remove('hidden');
     const session = state.session || {};
@@ -680,8 +701,17 @@
     if (!document.getElementById('identity-crown')) {
       $('identity-initial').insertAdjacentHTML('beforeend', `<span id="identity-crown" class="av216-crown">${ui.crown216(15)}</span>`);
     }
-    const stored = localStorage.getItem('locallink_admin_view');
-    const start = stored && LL.views[stored] ? stored : 'dashboard';
+    const view = LL.views[start] || LL.views.dashboard;
+    state.view = start;
+    $('crumb-view').textContent = view.title;
+    $('crumb-sub').textContent = view.subtitle;
+    document.title = `${view.title} · LocalLink Admin`;
+    renderNav();
+  }
+
+  function showApp() {
+    const start = startView219();
+    paintShell219(start);
     mountView(start);
     loadNotifications();
   }
@@ -1130,12 +1160,19 @@
     if (event.key === '/' && !typing) { event.preventDefault(); closeOverlays(); globalSearch.focus(); }
   });
 
-  window.addEventListener('resize', () => {
-    const app = $('app');
-    const compact = window.innerWidth < 1000;
-    $('menu-toggle').classList.toggle('hidden', !compact);
-    $('collapse-toggle').classList.toggle('hidden', compact);
-  });
+  // Bundle 219: styles.css shows the menu button by width (also right after a
+  // refresh); here we only close the drawer when the screen becomes wide.
+  const compactMq219 = window.matchMedia ? window.matchMedia('(max-width: 1000px)') : null;
+  function syncLayout219() {
+    const compact = compactMq219 ? compactMq219.matches : window.innerWidth <= 1000;
+    if (!compact) {
+      $('app').classList.remove('drawer-open');
+      $('drawer-scrim').classList.add('hidden');
+    }
+  }
+  window.addEventListener('resize', syncLayout219);
+  window.addEventListener('pageshow', syncLayout219);
+  if (compactMq219 && compactMq219.addEventListener) compactMq219.addEventListener('change', syncLayout219);
 
   $('menu-toggle').addEventListener('click', () => {
     const app = $('app');
@@ -1220,6 +1257,7 @@
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
+    if (state.booting219 && bootRetryAt219) { bootCheck219(); return; }
     if (rateLimited()) return;
     loadNotifications();
     if (state.view === 'dashboard') mountView('dashboard', { quiet: true });
@@ -1290,18 +1328,104 @@
   const collapsed = localStorage.getItem('locallink_admin_collapsed') === '1';
   if (collapsed) $('app').classList.add('collapsed');
 
+  // ------------------------------------------------------- Bundle 219 boot
+  // Saved login: real shell + page-shaped shimmer at once, then check the
+  // login. Only a 401 shows the login page; a dropped connection, a slow or
+  // restarting server (5xx, no answer in 10 s) or a 429 keeps the panel with
+  // a retry bar and never deletes the saved login.
+  const RETRY_STEPS219 = [5, 10, 20, 30];
+  let bootTry219 = 0;
+  let bootTimer219 = null;
+  let bootRetryAt219 = 0;
+
+  function unreachable219(err) {
+    if (!err) return false;
+    if (err.name === 'AbortError' || err.name === 'TypeError') return true;
+    return typeof err.status === 'number' && err.status >= 500;
+  }
+
+  function hideServerBar219() {
+    const bar = document.getElementById('server-bar219');
+    if (bar) bar.remove();
+    bootRetryAt219 = 0;
+  }
+
+  function paintServerBar219() {
+    if (!bootRetryAt219) return;
+    const seconds = Math.max(0, Math.ceil((bootRetryAt219 - Date.now()) / 1000));
+    const text = seconds > 0 ? `Trying again in ${seconds} s…` : 'Trying again…';
+    let bar = document.getElementById('server-bar219');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'server-bar219';
+      bar.className = 'bar219';
+      bar.setAttribute('role', 'status');
+      bar.innerHTML = ui.icon('i-pulse') +
+        '<div class="bar219-text"><strong>Can\'t reach the server</strong><span></span></div>' +
+        '<button class="bar219-retry" type="button">Retry</button>';
+      bar.querySelector('.bar219-retry').addEventListener('click', () => bootCheck219());
+      const content = $('view');
+      content.parentElement.insertBefore(bar, content);
+    }
+    bar.querySelector('.bar219-text span').textContent = text;
+  }
+
+  function scheduleBoot219(seconds) {
+    if (bootTimer219) clearTimeout(bootTimer219);
+    bootTimer219 = setTimeout(() => bootCheck219(), seconds * 1000);
+  }
+
+  function serverUnreachable219() {
+    const seconds = RETRY_STEPS219[Math.min(bootTry219, RETRY_STEPS219.length - 1)];
+    bootTry219 += 1;
+    scheduleBoot219(seconds);
+    bootRetryAt219 = Date.now() + seconds * 1000;
+    paintServerBar219();
+  }
+
+  async function bootCheck219() {
+    if (bootTimer219) { clearTimeout(bootTimer219); bootTimer219 = null; }
+    if (!state.token) return;
+    state.booting219 = true;
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    const killer = ctrl ? setTimeout(() => ctrl.abort(), 10000) : null;
+    try {
+      state.summary = await api('/api/v1/admin/summary', { signal: ctrl ? ctrl.signal : undefined });
+    } catch (err) {
+      if (!state.token) return; // 401: api() already showed the login page
+      if (err && err.code === 429) {
+        // Q1 = A: stay signed in; the "Server is busy" bar counts down.
+        hideServerBar219();
+        scheduleBoot219(Math.max(1, (state.rateLimitedUntil - Date.now()) / 1000) + 0.5);
+        return;
+      }
+      if (unreachable219(err)) { serverUnreachable219(); return; }
+      showLogin(); // any other answer: same as before 219
+      return;
+    } finally {
+      if (killer) clearTimeout(killer);
+    }
+    hideServerBar219();
+    renderRateLimitBanner();
+    bootTry219 = 0;
+    renderNav();
+    await mountView(state.view);
+    if (!document.getElementById('server-bar219')) state.booting219 = false;
+    loadNotifications();
+  }
+
+  setInterval(paintServerBar219, 1000);
+
   (async function boot() {
     const token = state.token;
     if (!token) { showLogin(); return; }
     let identity = null;
     try { identity = JSON.parse(localStorage.getItem(IDENTITY_KEY) || 'null'); } catch (err) { identity = null; }
     state.session = identity || { username: 'Authenticated administrator', role: 'auditor' };
-    try {
-      state.summary = await api('/api/v1/admin/summary');
-      showApp();
-    } catch (err) {
-      showLogin();
-    }
+    const start = startView219();
+    paintShell219(start);
+    $('view').innerHTML = ui.bootSkeleton219(start);
+    await bootCheck219();
   })();
 
   schedulePoll();

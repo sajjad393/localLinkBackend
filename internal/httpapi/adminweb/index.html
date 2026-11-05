@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -61,8 +61,30 @@
   </defs>
 </svg>
 
+<!-- -------------------------------------------------------------- Boot 219 -->
+<!-- Bundle 219: shimmer from the first frame. app.js swaps it for the login
+     page (no saved login) or for the real panel (saved login). -->
+<div id="boot219" class="boot219" aria-busy="true" aria-label="Loading LocalLink Admin">
+  <aside class="boot219-side">
+    <span class="skeleton boot219-brand"></span>
+    <span class="skeleton w-40"></span><span class="skeleton"></span><span class="skeleton"></span>
+    <span class="skeleton"></span><span class="skeleton w-60"></span><span class="skeleton"></span><span class="skeleton"></span>
+  </aside>
+  <div class="boot219-main">
+    <div class="boot219-top">
+      <span class="skeleton boot219-sq"></span><span class="skeleton boot219-title"></span>
+      <span class="boot219-gap"></span>
+      <span class="skeleton boot219-dot"></span><span class="skeleton boot219-av"></span>
+    </div>
+    <div class="boot219-body">
+      <span class="skeleton h-lg w-40"></span>
+      <span class="skeleton h-xl"></span><span class="skeleton h-xl"></span><span class="skeleton h-xl"></span>
+    </div>
+  </div>
+</div>
+
 <!-- ------------------------------------------------------------------ Login -->
-<main id="auth" class="auth">
+<main id="auth" class="auth hidden">
   <section class="auth-brand" aria-hidden="false">
     <div class="brand-row">
       <span class="brand-mark">
@@ -139,7 +161,7 @@
 
   <div class="shell">
     <header class="topbar">
-      <button class="btn-icon hidden" id="menu-toggle" type="button" aria-label="Open navigation" title="Open navigation">
+      <button class="btn-icon" id="menu-toggle" type="button" aria-label="Open navigation" title="Open navigation">
         <svg class="icon" viewBox="0 0 24 24"><use href="#i-menu"></use></svg>
       </button>
       <div class="crumbs">
