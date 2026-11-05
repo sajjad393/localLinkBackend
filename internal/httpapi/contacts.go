@@ -91,9 +91,19 @@ func (a *API) AddAccountContact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid contact")
 		return
 	}
+	// Bundle 218: a friend saved as a phone-only id follows her to the real account.
+	if offlineIDPattern.MatchString(contactID) {
+		if real := a.resolveOffline218(contactID); real != "" {
+			contactID = real
+		}
+		if contactID == userID {
+			writeError(w, http.StatusBadRequest, "invalid contact")
+			return
+		}
+	}
 	var exists string
 	if err := a.store.DB().QueryRow(`SELECT id FROM users WHERE id=? AND status='active'`, contactID).Scan(&exists); err != nil {
-		writeError(w, http.StatusNotFound, "user not found")
+		writeErrorCode(w, http.StatusNotFound, "NOT_ON_SERVER", "user not found")
 		return
 	}
 	// Mutual contacts: record the relationship in BOTH directions so the
@@ -131,7 +141,7 @@ func (a *API) AddAccountContact(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.audit("account_contact_added", userID, "contact="+contactID)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "user_id": contactID})
 }
 
 func (a *API) RemoveAccountContact(w http.ResponseWriter, r *http.Request) {

@@ -221,7 +221,23 @@ func (a *API) enrichUsers216(list []AdminUser) {
 		}
 		rows.Close()
 	}
+	// Bundle 218: "Joined from offline · date".
+	joined := map[string]string{}
+	for _, part := range chunks216(uniq216(ids), 400) {
+		rows, err := a.store.DB().Query(`SELECT user_id,MIN(linked_at) FROM offline_ids WHERE user_id IN (`+placeholders216(len(part))+`) GROUP BY user_id`, anyArgs216(part)...)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var id, at string
+			if rows.Scan(&id, &at) == nil {
+				joined[id] = at
+			}
+		}
+		rows.Close()
+	}
 	for i := range list {
+		list[i].JoinedOfflineAt = joined[list[i].ID]
 		p := people[list[i].ID]
 		list[i].DisplayName = p.Display
 		if list[i].DisplayName == "" {

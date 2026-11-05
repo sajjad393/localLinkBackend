@@ -56,11 +56,16 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 		Platform    string `json:"platform"`
 		PairingCode string `json:"pairing_code"`
 		HardwareFP  string `json:"hardware_fp"`
+		// Bundle 218: the phone-only account this registration comes from,
+		// and the recovery code that phone already shows (kept by the server).
+		OfflineUserID string `json:"offline_user_id"`
+		RecoveryCode  string `json:"recovery_code"`
 	}
 	if err := decodeJSON(r, &in, 12<<10); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	offline := offlineID218(in.OfflineUserID)
 	hardwareFP := strings.TrimSpace(in.HardwareFP)
 	if len(hardwareFP) > 128 || hasControlChars(hardwareFP) {
 		hardwareFP = ""
@@ -71,7 +76,7 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if required := strings.TrimSpace(getenv("LOCALLINK_PAIRING_CODE", "")); required != "" && pairingCode != required {
-		writeError(w, http.StatusForbidden, "invalid pairing code")
+		writeErrorCode(w, http.StatusForbidden, "PAIRING_REQUIRED", "invalid pairing code")
 		return
 	}
 	salt := make([]byte, passwordSaltLength)
@@ -90,6 +95,10 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to generate recovery code")
 		return
 	}
+	// Bundle 218: keep the code the offline phone already shows.
+	if c := normalizeRecoveryCode(in.RecoveryCode); recoveryFormat218.MatchString(c) {
+		recoveryCode = c
+	}
 	now := time.Now().UTC()
 	nowText := now.Format(time.RFC3339Nano)
 	expires := now.Add(authSessionTTL)
@@ -105,7 +114,7 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 	if _, err = tx.Exec(`INSERT INTO users(id,username,password_salt,password_hash,password_iterations,status,created_at,updated_at,recovery_code_hash,recovery_code_created_at,recovery_code_rotated_at,recovery_code_enabled) VALUES(?,?,?,?,?,'active',?,?,?,?,?,1)`,
 		userID, username, base64.RawURLEncoding.EncodeToString(salt), base64.RawURLEncoding.EncodeToString(hash), passwordIterations, nowText, nowText, tokenHash(recoveryCode), nowText, nowText); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			writeError(w, http.StatusConflict, "username is already registered")
+			writeErrorCode(w, http.StatusConflict, "USERNAME_TAKEN", "username is already registered")
 		} else {
 			writeError(w, http.StatusInternalServerError, "failed to create account")
 		}
@@ -114,7 +123,11 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 	if _, err = tx.Exec(`INSERT INTO devices(id,name,platform,created_at,last_seen_at,token_hash,user_id,hardware_fp) VALUES(?,?,?,?,?,?,?,?)`,
 		deviceID, deviceName, platform, nowText, nowText, tokenHash(token), userID, hardwareFP); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			writeError(w, http.StatusConflict, "device id is already registered")
+			// Bundle 218: name the other account only when the same hardware
+			// id proves it is this very phone.
+			var owner, fp string
+			_ = tx.QueryRow(`SELECT COALESCE(u.username,''),COALESCE(d.hardware_fp,'') FROM devices d LEFT JOIN users u ON u.id=d.user_id WHERE d.id=?`, deviceID).Scan(&owner, &fp)
+			writeDeviceTaken218(w, "device id is already registered", owner, fp, hardwareFP)
 		} else {
 			writeError(w, http.StatusInternalServerError, "failed to register device")
 		}
@@ -129,9 +142,19 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create profile")
 		return
 	}
+	if offline != "" {
+		if _, err = tx.Exec(`INSERT OR IGNORE INTO offline_ids(offline_id,user_id,device_id,linked_at) VALUES(?,?,?,?)`, offline, userID, deviceID, nowText); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to link offline account")
+			return
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit account")
 		return
+	}
+	if offline != "" {
+		a.carryOfflineBlock218(userID, offline, deviceID)
+		a.audit("account_from_offline", userID, "offline="+offline)
 	}
 	a.audit("account_register", userID, "username="+username)
 	writeJSON(w, http.StatusCreated, AuthResponse{
@@ -157,11 +180,14 @@ func (a *API) LoginAccount(w http.ResponseWriter, r *http.Request) {
 		Platform    string `json:"platform"`
 		PairingCode string `json:"pairing_code"`
 		HardwareFP  string `json:"hardware_fp"`
+		// Bundle 218: the phone-only account that signs in to its own account.
+		OfflineUserID string `json:"offline_user_id"`
 	}
 	if err := decodeJSON(r, &in, 12<<10); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	offline := offlineID218(in.OfflineUserID)
 	username := strings.ToLower(strings.TrimSpace(in.Username))
 	if !a.allowSecurityAction("login-account", authUsernameRateKey(r, username), maxLoginAttemptsPerMinute) {
 		w.Header().Set("Retry-After", "60")
@@ -197,7 +223,7 @@ func (a *API) LoginAccount(w http.ResponseWriter, r *http.Request) {
 		// enumeration by response timing.
 		_ = derivePasswordKey(password, []byte("locallink-dummy-salt-v1"), passwordIterations)
 		a.auditSecurity("login_failed", "", "", registrationKey(r), "unknown account")
-		writeError(w, http.StatusUnauthorized, "invalid username or password")
+		writeErrorCode(w, http.StatusUnauthorized, "BAD_LOGIN", "invalid username or password")
 		return
 	}
 	if status != "active" {
@@ -238,7 +264,7 @@ func (a *API) LoginAccount(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusTooManyRequests, "account temporarily locked after repeated failed logins")
 			return
 		}
-		writeError(w, http.StatusUnauthorized, "invalid username or password")
+		writeErrorCode(w, http.StatusUnauthorized, "BAD_LOGIN", "invalid username or password")
 		return
 	}
 	a.resetLoginFailures(user.ID)
@@ -252,7 +278,9 @@ func (a *API) LoginAccount(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !deviceOwner.Valid || deviceOwner.String == "" || deviceOwner.String != user.ID {
-			writeError(w, http.StatusConflict, "device id belongs to another or legacy device")
+			var owner, fp string
+			_ = a.store.DB().QueryRow(`SELECT COALESCE(u.username,''),COALESCE(d.hardware_fp,'') FROM devices d LEFT JOIN users u ON u.id=d.user_id WHERE d.id=?`, deviceID).Scan(&owner, &fp)
+			writeDeviceTaken218(w, "device id belongs to another or legacy device", owner, fp, hardwareFP)
 			return
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -277,7 +305,7 @@ func (a *API) LoginAccount(w http.ResponseWriter, r *http.Request) {
 			// First-time login from a new device is a device-enrollment event.
 			// Require the deployment pairing code when the server is configured with one.
 			if required := strings.TrimSpace(getenv("LOCALLINK_PAIRING_CODE", "")); required != "" && !secureTokenEqual(required, pairingCode) {
-				writeError(w, http.StatusForbidden, "device pairing is required for this first login")
+				writeErrorCode(w, http.StatusForbidden, "PAIRING_REQUIRED", "device pairing is required for this first login")
 				return
 			}
 		}
@@ -319,9 +347,19 @@ func (a *API) LoginAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to initialize profile")
 		return
 	}
+	if offline != "" {
+		if _, err = tx.Exec(`INSERT OR IGNORE INTO offline_ids(offline_id,user_id,device_id,linked_at) VALUES(?,?,?,?)`, offline, user.ID, deviceID, nowText); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to link offline account")
+			return
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit login")
 		return
+	}
+	if offline != "" {
+		a.carryOfflineBlock218(user.ID, offline, deviceID)
+		a.audit("account_link_offline", user.ID, "offline="+offline)
 	}
 	a.audit("account_login", user.ID, "device="+deviceID)
 	a.auditSecurity("login_success", user.ID, deviceID, registrationKey(r), "authenticated")

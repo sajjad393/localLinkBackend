@@ -201,7 +201,7 @@ func (a *API) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	if username != currentUsername {
 		if _, err = tx.Exec(`UPDATE users SET username=?,updated_at=? WHERE id=? AND status='active'`, username, now, userID); err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "unique") {
-				writeError(w, http.StatusConflict, "username is already registered")
+				writeErrorCode(w, http.StatusConflict, "USERNAME_TAKEN", "username is already registered")
 			} else {
 				writeError(w, http.StatusInternalServerError, "failed to update username")
 			}
@@ -212,7 +212,11 @@ func (a *API) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		VALUES(?,?,NULL,NULL,0,'',NULL,?,?,?,?,?,?,?,?)
 		ON CONFLICT(user_id) DO UPDATE SET display_name=excluded.display_name,phone_number=excluded.phone_number,phone_visibility=excluded.phone_visibility,discoverable_by_phone=excluded.discoverable_by_phone,discoverable_by_name=excluded.discoverable_by_name,directory_sync_enabled=excluded.directory_sync_enabled,profile_version=profiles.profile_version+1,updated_at=excluded.updated_at`, userID, displayName, phoneNumber, phoneVisibility, boolInt(discoverableByPhone), boolInt(discoverableByName), boolInt(directorySyncEnabled), 1, now, now); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") && phoneNumber != "" {
-			writeError(w, http.StatusConflict, "phone number is already registered")
+			writeErrorCode(w, http.StatusConflict, "PHONE_TAKEN", "phone number is already registered")
+			// Bundle 218: the admin sees it in the Audit log (last 4 digits only).
+			// Roll back first: the DB has one connection.
+			_ = tx.Rollback()
+			a.audit("profile_phone_conflict", userID, "number=***"+last4(phoneNumber))
 		} else {
 			writeError(w, http.StatusInternalServerError, "failed to update profile")
 		}
