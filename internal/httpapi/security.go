@@ -21,10 +21,13 @@ const (
 	maxSensitiveAttemptsPerMinute = 12
 	loginFailureThreshold         = 8
 	loginLockDuration             = 15 * time.Minute
-	securityAuditRetention        = 90 * 24 * time.Hour
-	authSessionRetention          = 7 * 24 * time.Hour
-	transferRetention             = 24 * time.Hour
-	recoveryRetention             = 30 * 24 * time.Hour
+	// Bundle 223 (A): a saved time more than this far in the future was
+	// written while the server clock was ahead; it is healed, not trusted.
+	clockAheadAllowance    = time.Minute
+	securityAuditRetention = 90 * 24 * time.Hour
+	authSessionRetention   = 7 * 24 * time.Hour
+	transferRetention      = 24 * time.Hour
+	recoveryRetention      = 30 * 24 * time.Hour
 )
 
 func setSecurityHeaders(w http.ResponseWriter) {
@@ -89,7 +92,9 @@ func (a *API) allowPersistentSecurityAction(scope, key string, max int, window t
 
 	// Keep stale limiter buckets bounded. A short hard ceiling avoids turning
 	// this table into an unbounded abuse log even when attackers vary keys.
-	if _, err := tx.Exec(`DELETE FROM security_rate_limits WHERE updated_at < ?`, now.Add(-2*time.Hour).Format(time.RFC3339Nano)); err != nil {
+	// Bundle 223 (A): rows written while the clock was ahead (updated_at in
+	// the future) are removed too; before, they were never cleaned.
+	if _, err := tx.Exec(`DELETE FROM security_rate_limits WHERE updated_at < ? OR updated_at > ?`, now.Add(-2*time.Hour).Format(time.RFC3339Nano), now.Add(clockAheadAllowance).Format(time.RFC3339Nano)); err != nil {
 		return false
 	}
 
@@ -106,7 +111,9 @@ func (a *API) allowPersistentSecurityAction(scope, key string, max int, window t
 		return false
 	}
 	started, parseErr := time.Parse(time.RFC3339Nano, startedText)
-	if parseErr != nil || started.Before(windowStart) {
+	// Bundle 223 (A): a window that "starts" in the future (clock was ahead,
+	// then put back) never ended and refused the phone forever. Start anew.
+	if parseErr != nil || started.Before(windowStart) || started.After(now.Add(clockAheadAllowance)) {
 		if _, err = tx.Exec(`UPDATE security_rate_limits SET window_started_at=?,count=1,updated_at=? WHERE scope=? AND rate_key=?`, nowText, nowText, scope, rateKey); err != nil {
 			return false
 		}
@@ -164,7 +171,8 @@ func (a *API) recordLoginFailure(userID string) (lockedUntil time.Time) {
 	var count int
 	var lastFailed string
 	_ = tx.QueryRow(`SELECT COALESCE(failed_login_count,0),COALESCE(last_failed_login_at,'') FROM users WHERE id=?`, userID).Scan(&count, &lastFailed)
-	if parsed, err := time.Parse(time.RFC3339Nano, lastFailed); err == nil && now.Sub(parsed) > loginLockDuration {
+	if parsed, err := time.Parse(time.RFC3339Nano, lastFailed); err == nil && (now.Sub(parsed) > loginLockDuration || parsed.After(now.Add(clockAheadAllowance))) {
+		// Bundle 223 (Q1): a "last failed" time in the future starts again.
 		count = 0
 	}
 	count++
@@ -191,7 +199,13 @@ func (a *API) loginLockedUntil(userID string) time.Time {
 		return time.Time{}
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, raw.String)
-	if err != nil || !time.Now().UTC().Before(parsed) {
+	now := time.Now().UTC()
+	if err != nil || !now.Before(parsed) {
+		return time.Time{}
+	}
+	// Bundle 223 (Q1): a lock can never be longer than loginLockDuration; a
+	// longer one was written while the clock was ahead and is ignored.
+	if parsed.After(now.Add(loginLockDuration + clockAheadAllowance)) {
 		return time.Time{}
 	}
 	return parsed
