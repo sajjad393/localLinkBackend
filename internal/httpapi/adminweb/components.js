@@ -219,10 +219,19 @@ window.LL = window.LL || {};
         message: o.emptyMessage || 'No records match this view.',
       });
     }
-    const head = columns.map((c) => `<th class="${c.numeric ? 'num' : ''}">${esc(c.label)}</th>`).join('');
+    const head = columns.map((c) => `<th class="${[c.numeric ? 'num' : '', c.hideTablet ? 'hide-tab' : ''].filter(Boolean).join(' ')}">${esc(c.label)}</th>`).join('');
     const body = rows.map((row) => {
-      const cells = (Array.isArray(row) ? row : row.cells).map((cell, i) =>
-        `<td class="${columns[i] && columns[i].numeric ? 'num' : ''}">${cell === null || cell === undefined ? '—' : cell}</td>`).join('');
+      // Bundle 217: data-label + classes so a phone shows each row as a card.
+      // The status pill goes top-right: a column marked status, else the first pill cell.
+      let statusDone = columns.some((c) => c && c.status);
+      const cells = (Array.isArray(row) ? row : row.cells).map((cell, i) => {
+        const c = columns[i] || {};
+        const html = cell === null || cell === undefined ? '—' : String(cell);
+        const cls = [c.numeric ? 'num' : '', i === 0 ? 'col-first' : '', c.label === '' ? 'col-act' : '', c.hideTablet ? 'hide-tab' : ''];
+        if (c.status && i > 0) cls.push('col-status');
+        else if (i > 0 && !statusDone && html.indexOf('class="pill216') >= 0) { cls.push('col-status'); statusDone = true; }
+        return `<td class="${cls.filter(Boolean).join(' ')}" data-label="${esc(c.label || '')}">${html}</td>`;
+      }).join('');
       const attrs = row && row.rowAttrs ? ' ' + row.rowAttrs : '';
       return `<tr${attrs}>${cells}</tr>`;
     }).join('');
@@ -379,18 +388,31 @@ window.LL = window.LL || {};
     purple: ['#2A2245', '#B49CFF'], teal: ['#0F3330', '#5EEAD4'],
   };
 
+  // Bundle 217: the new crown (same drawing as the app's paintCrown217).
+  // Units: crown width 100, height 88; the viewBox leaves room for pearls.
   function crown216(width) {
-    const w = Math.max(10, Math.min(28, Number(width) || 14));
-    const h = w * 0.74;
-    // Units: w = 100, h = 74, band = 18.5.
-    return `<svg class="crown216" width="${w.toFixed(1)}" height="${h.toFixed(1)}" viewBox="-11 -3 122 80" aria-label="Admin" role="img">
+    const w = Math.max(10, Math.min(32, Number(width) || 14));
+    return `<svg class="crown216" width="${(w * 1.12).toFixed(1)}" height="${(w * 0.94).toFixed(1)}" viewBox="-6 -6 112 94" aria-label="Admin" role="img">
+      <defs><linearGradient id="cr217" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFE985"/><stop offset=".5" stop-color="#FFC727"/><stop offset="1" stop-color="#E09A12"/></linearGradient></defs>
       <g stroke="#A87400" stroke-width="3.5" stroke-linejoin="round">
-        <polygon points="5,55.5 0,22.2 30,41.4 50,7.4 70,41.4 100,22.2 95,55.5" fill="#FFC727"/>
-        <polygon points="5,55.5 95,55.5 93,74 7,74" fill="#EFA300"/>
-        <circle cx="0" cy="22.2" r="9.5" fill="#FFC727"/><circle cx="50" cy="7.4" r="9.5" fill="#FFC727"/><circle cx="100" cy="22.2" r="9.5" fill="#FFC727"/>
+        <polygon points="10,71.5 3,23.5 30,47.5 50,9.5 70,47.5 97,23.5 90,71.5" fill="url(#cr217)"/>
+        <rect x="8" y="67.5" width="84" height="20" rx="5" fill="#EFA300"/>
+        <circle cx="3" cy="21.5" r="7.5" fill="#FFF1B0"/><circle cx="50" cy="7.5" r="7.5" fill="#FFF1B0"/><circle cx="97" cy="21.5" r="7.5" fill="#FFF1B0"/>
       </g>
-      <circle cx="50" cy="64.7" r="6" fill="#E5484D"/>
+      <g stroke="#A87400" stroke-width="1.75">
+        <ellipse cx="50" cy="77.5" rx="6.5" ry="5.5" fill="#E5484D"/>
+        <ellipse cx="27" cy="77.5" rx="4.5" ry="3.8" fill="#3B82F6"/><ellipse cx="73" cy="77.5" rx="4.5" ry="3.8" fill="#3B82F6"/>
+      </g>
+      <circle cx="48.4" cy="75.8" r="1.3" fill="#fff" fill-opacity=".65"/><circle cx="25.9" cy="76.6" r=".9" fill="#fff" fill-opacity=".65"/><circle cx="71.9" cy="76.6" r=".9" fill="#fff" fill-opacity=".65"/>
+      <path d="M20 63.5L14 35.5" stroke="#fff" stroke-opacity=".47" stroke-width="3" stroke-linecap="round"/>
     </svg>`;
+  }
+
+  // Bundle 217: mix two #rrggbb colours (t = 0 -> a, 1 -> b).
+  function mix217(a, b, t) {
+    const p = (h) => [1, 3, 5].map((i) => parseInt(String(h).slice(i, i + 2), 16));
+    const x = p(a); const y = p(b);
+    return '#' + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, '0')).join('');
   }
 
   function initials216(name) {
@@ -407,7 +429,7 @@ window.LL = window.LL || {};
       ? ` data-avatar-user="${esc(o.userId)}"` : '';
     return `<span class="${cls}" style="--av:${size}px"${photo} title="${esc(o.name || '')}">
       <span class="av216-in">${esc(initials216(o.name))}</span>
-      ${o.admin && !o.blocked ? `<span class="av216-crown">${crown216(size * 0.4)}</span>` : ''}
+      ${o.admin && !o.blocked ? `<span class="av216-crown">${crown216(size * 0.55)}</span>` : ''}
       ${o.online ? '<span class="av216-dot"></span>' : ''}
     </span>`;
   }
@@ -455,7 +477,7 @@ window.LL = window.LL || {};
     esc, icon, badge, statusBadge, severityBadge, statusInfo, severityTone, severityIcon, token,
     panel, sectionHead, metricCard, statRow, headline, table, timeline, notificationItem,
     emptyState, errorState, skeletonPanel, skeletonCards, segmented, healthRow, quickAction, note, filterBar,
-    crown216, avatar216, person216, pill216, chips216, when216, initials216, TONES_216, LEVELS_216, LINKS_216,
+    crown216, mix217, avatar216, person216, pill216, chips216, when216, initials216, TONES_216, LEVELS_216, LINKS_216,
   };
 
   LL.fmt = { number, bytes, relative, dateTime, bucket, duration, titleCase };

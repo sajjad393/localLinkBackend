@@ -193,12 +193,12 @@ LL.views = {};
 
       const allZero = (list) => list.length === 0 || list.every((p) => p.value === 0);
       const messageChart = messagePoints.length && !allZero(messagePoints)
-        ? chartCanvas({ type: 'line', options: { points: messagePoints, color: ui.token('primary', '#1e5bff'), height: 220, xLabelCount: 6, longRange } }, 220)
+        ? chartCanvas({ type: 'line', options: { points: messagePoints, color: ui.token('primary', '#1e5bff'), height: 220, xLabelCount: window.innerWidth <= 640 ? 4 : 6, longRange } }, 220)
         : ui.emptyState({ icon: 'i-activity', title: 'No messages in this window', message: 'The server accepted no messages during the selected period.' });
       const byteChart = !runtimeAvailable
         ? ui.emptyState({ icon: 'i-activity', title: 'Traffic metrics unavailable', message: 'This server build does not expose the runtime sampler.' })
         : (bytePoints.length && !allZero(bytePoints)
-          ? chartCanvas({ type: 'line', options: { points: bytePoints, color: ui.token('info', '#0b5fa5'), height: 200, xLabelCount: 6, longRange } }, 200)
+          ? chartCanvas({ type: 'line', options: { points: bytePoints, color: ui.token('info', '#0b5fa5'), height: 200, xLabelCount: window.innerWidth <= 640 ? 4 : 6, longRange } }, 200)
           : ui.emptyState({ icon: 'i-activity', title: 'No response traffic', message: 'No bytes were served during the selected period.' }));
 
       parts.push(pollRegion('analytics', `<section class="section">
@@ -509,7 +509,7 @@ LL.views = {};
       const chip = query.admin === 'yes' ? 'admins' : (query.status || 'all');
       const columns = [
         { label: 'Person' }, { label: 'Admin' }, { label: 'Phones', numeric: true },
-        { label: 'Status' }, { label: 'Last seen' }, { label: '' },
+        { label: 'Status', status: true }, { label: 'Last seen' }, { label: '' },
       ].map((c) => (c.label === 'Admin' ? { label: 'Admin level' } : c));
       const rows = filtered.map((u) => [
         who216(map, u.id, u.display_name || u.username, '@' + (u.username || ''), { online: num(u.online_devices) > 0, size: 32 }),
@@ -584,9 +584,13 @@ LL.views = {};
     };
     host.innerHTML = `<div class="side216-scrim" data-side216-close></div>
       <aside class="side216" role="dialog" aria-modal="true" aria-label="Manage ${ui.esc(name)}">
-        <div class="row" style="justify-content:space-between;align-items:flex-start">
-          ${ui.person216({ userId: u.id, name, sub: '@' + (u.username || ''), hasAvatar: !!u.has_avatar, admin: !!u.admin_role, blocked: u.status === 'suspended', size: 48 })}
+        <div class="side216-head">
+          <button class="btn btn-icon side216-back" data-side216-close aria-label="Back">${ui.icon('i-chevron-left')}</button>
+          <strong class="side216-title">Manage ${ui.esc(name)}</strong>
           <button class="btn btn-icon" data-side216-close aria-label="Close">${ui.icon('i-close')}</button>
+        </div>
+        <div class="side216-person">
+          ${ui.person216({ userId: u.id, name, sub: '@' + (u.username || ''), hasAvatar: !!u.has_avatar, admin: !!u.admin_role, blocked: u.status === 'suspended', size: 48 })}
         </div>
         <h3>Status</h3>${['active', 'suspended', 'disabled'].map(statusCard).join('')}
         <h3>Admin level</h3>${levels.map(levelCard).join('')}
@@ -595,7 +599,7 @@ LL.views = {};
         <div data-wifi-rule-host>${ui.chips216(WIFI_RULES_216, '__loading', 'disabled data-wifi-rule')}</div>
         <h3>Phones</h3>
         <button class="btn btn-sm" data-user-devices="${ui.esc(u.id)}">See phones (${fmt.number(u.devices)})</button>
-        ${owner ? `<button class="btn btn-sm btn-danger" data-signout-all="${ui.esc(u.id)}" style="margin-left:8px">Sign out all phones</button>` : ''}
+        ${owner ? `<button class="btn btn-sm btn-danger side216-danger" data-signout-all="${ui.esc(u.id)}">Sign out all phones</button>` : ''}
       </aside>`;
     host.querySelectorAll('[data-side216-close]').forEach((b) => b.addEventListener('click', () => { host.innerHTML = ''; }));
     try {
@@ -659,7 +663,7 @@ LL.views = {};
           ${ui.panel({
             pad0: true,
             body: rows.length
-              ? `<div style="padding:0 4px">${ui.table({ columns: [{ label: 'Phone' }, { label: 'Owner' }, { label: 'Link now' }, { label: 'Last seen' }, { label: 'Build' }, { label: '' }], rows })}</div>`
+              ? `<div style="padding:0 4px">${ui.table({ columns: [{ label: 'Phone' }, { label: 'Owner' }, { label: 'Link now', status: true }, { label: 'Last seen' }, { label: 'Build', hideTablet: true }, { label: '' }], rows })}</div>`
               : '<div class="empty216">No phones found. Try another name or filter.</div>',
           })}
         </div>`;
@@ -1095,6 +1099,30 @@ LL.views = {};
     return pos;
   }
 
+  // Bundle 217 (§2.1): quadratic aerial path p -> q, bowing away from C.
+  function arc217(p, q, C, k) {
+    const dx = q.x - p.x; const dy = q.y - p.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const mid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+    let n = { x: -dy / len, y: dx / len };
+    const ox = mid.x - C.x; const oy = mid.y - C.y;
+    if (Math.hypot(ox, oy) < 1) { if (n.y > 0) n = { x: -n.x, y: -n.y }; } else if (ox * n.x + oy * n.y < 0) n = { x: -n.x, y: -n.y };
+    const c = { x: mid.x + n.x * k * len, y: mid.y + n.y * k * len };
+    const f = (v) => Math.round(v * 10) / 10;
+    return `M${f(p.x)} ${f(p.y)} Q${f(c.x)} ${f(c.y)} ${f(q.x)} ${f(q.y)}`;
+  }
+
+  // Bundle 217: fit all shown points into the stage (60 px sides/top, 80 px bottom).
+  function fit217(points, stageW, stageH) {
+    if (!points.length || !stageW || !stageH) return null;
+    const xs = points.map((p) => p.x); const ys = points.map((p) => p.y);
+    const minX = Math.min(...xs) - 60; const maxX = Math.max(...xs) + 60;
+    const minY = Math.min(...ys) - 60; const maxY = Math.max(...ys) + 80;
+    const bw = Math.max(1, maxX - minX); const bh = Math.max(1, maxY - minY);
+    const k = Math.min(1.6, Math.max(0.4, Math.min(stageW / bw, stageH / bh)));
+    return { k, x: (stageW - bw * k) / 2 - minX * k, y: (stageH - bh * k) / 2 - minY * k };
+  }
+
   const map = {
     id: 'map',
     title: 'Map',
@@ -1118,14 +1146,26 @@ LL.views = {};
       });
       const pos = layout216(nodes, edges);
       const shown = (n) => mapView.filter === 'all' || linkOf(n) === mapView.filter;
-      const lines = edges.map((e) => {
+      // Bundle 217: aerial (flight-path) lines that bow away from the centre.
+      const allPts = nodes.map((n) => pos[n.device_id]).filter(Boolean).concat([pos.server]);
+      const C = allPts.reduce((a, p) => ({ x: a.x + p.x / allPts.length, y: a.y + p.y / allPts.length }), { x: 0, y: 0 });
+      const lines = edges.map((e, i) => {
         const p = pos[e.from]; const q = pos[e.to];
         if (!p || !q) return '';
         const to = nodes.find((n) => n.device_id === e.to) || {};
         const from = nodes.find((n) => n.device_id === e.from) || {};
-        const blocked = to.blocked || from.blocked;
-        const color = blocked ? '#8b949e' : ((ui.LINKS_216[e.link] || ui.LINKS_216.server).color);
-        return `<line x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" stroke="${color}" stroke-width="2" ${blocked ? 'stroke-dasharray="9 9"' : ''} opacity="${(mapView.filter === 'all' || (shown(to) && (e.from === 'server' || shown(from)))) ? 1 : 0.2}"/>`;
+        const blocked = !!(to.blocked || from.blocked);
+        const dim = !(mapView.filter === 'all' || (shown(to) && (e.from === 'server' || shown(from))));
+        const d = arc217(p, q, C, 0.60);
+        if (blocked) {
+          return `<g class="link217 blocked${dim ? ' dim' : ''}"><path class="base" d="${d}"/></g>`;
+        }
+        const link = ui.LINKS_216[e.link] ? e.link : 'server';
+        const color = ui.LINKS_216[link].color;
+        const style = `--lc:${color};--lc2:${ui.mix217(color, '#ffffff', 0.5)};--lc3:${ui.mix217(color, '#000000', 0.12)}`;
+        return `<g class="link217 l-${link}${dim ? ' dim' : ''}" style="${style}">
+          <path class="glow" d="${d}"/><path class="base" d="${d}"/><path class="flow" id="lk${i}" d="${d}"/>
+          <g class="dot"><circle r="5.5" class="halo"/><circle r="2.6" class="core" fill="#fff"/><animateMotion dur="3s" begin="-${((i * 0.69) % 3).toFixed(2)}s" repeatCount="indefinite"><mpath href="#lk${i}"/></animateMotion></g></g>`;
       }).join('');
       const people = {};
       nodes.forEach((n) => { if (n.user_id) people[n.user_id] = true; });
@@ -1140,11 +1180,12 @@ LL.views = {};
       const sideList = nodes.filter((n) => !mapView.pick || n.user_id === mapView.pick);
       const legend = Object.keys(ui.LINKS_216).filter((k) => edges.some((e) => e.link === k))
         .map((k) => `<span><i style="background:${ui.LINKS_216[k].color}"></i>${ui.esc(ui.LINKS_216[k].label)}</span>`).join('')
-        + (nodes.some((n) => n.blocked) ? '<span><i style="background:#8b949e"></i>Blocked \u00b7 relays only</span>' : '');
+        + (nodes.some((n) => n.blocked) ? '<span><i class="dash217"></i>Blocked \u00b7 relays only</span>' : '');
       el.innerHTML = `
         <div class="section">
           <div class="bar216">${ui.chips216(chips, mapView.filter, 'data-map-filter')}</div>
           <div class="map216">
+            <div class="map217-wrap">
             <div class="map216-stage" data-map-stage>
               <div class="map216-world" data-map-world style="transform:translate(${mapView.x}px,${mapView.y}px) scale(${mapView.k})">
                 <svg width="1000" height="700" aria-hidden="true">${lines}</svg>
@@ -1152,9 +1193,10 @@ LL.views = {};
                   <span class="map216-server">${ui.icon('i-server')}</span><span class="tag" style="background:none">Server</span></div>
                 ${nodeHtml}
               </div>
-              <div class="map216-zoom"><button data-map-zoom="in" aria-label="Zoom in">+</button><button data-map-zoom="out" aria-label="Zoom out">\u2212</button><button data-map-zoom="centre" aria-label="Centre">\u25ce</button></div>
-              <div class="map216-legend">${legend}</div>
+              <div class="map216-zoom"><button data-map-zoom="in" aria-label="Zoom in">+</button><button data-map-zoom="out" aria-label="Zoom out">\u2212</button><button data-map-zoom="fit" aria-label="Fit everyone">${ui.icon('i-fit')}</button></div>
               ${nodes.length ? '' : '<div class="empty216" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)">No phones yet.</div>'}
+            </div>
+            <div class="map216-legend">${legend}</div>
             </div>
             ${ui.panel({
               body: `<div class="map216-side"><h2>Phones (${sideList.length})</h2>
@@ -1179,36 +1221,93 @@ LL.views = {};
         mapView.k = k;
         apply();
       };
-      let drag = null;
+      // Bundle 217: one finger drags, two fingers pinch (pointer events).
+      const pts = new Map();
+      let drag = null; let pinch = null;
+      const local = (ev) => { const r = stage.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; };
+      const startDrag = () => {
+        const first = pts.values().next().value;
+        drag = first ? { x: first.x - mapView.x, y: first.y - mapView.y } : null;
+      };
+      const startPinch = () => {
+        const [a, b] = Array.from(pts.values());
+        pinch = { d0: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)), m0: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, k0: mapView.k, x0: mapView.x, y0: mapView.y };
+        drag = null;
+      };
       stage.addEventListener('pointerdown', (ev) => {
         if (ev.target.closest('[data-map-pick],[data-map-zoom]')) return;
-        drag = { x: ev.clientX - mapView.x, y: ev.clientY - mapView.y };
+        pts.set(ev.pointerId, local(ev));
+        try { stage.setPointerCapture(ev.pointerId); } catch (_) { /* old browsers */ }
         stage.classList.add('drag');
-        stage.setPointerCapture(ev.pointerId);
+        if (pts.size === 2) startPinch(); else if (pts.size === 1) startDrag();
       });
-      stage.addEventListener('pointermove', (ev) => { if (drag) { mapView.x = ev.clientX - drag.x; mapView.y = ev.clientY - drag.y; apply(); } });
-      stage.addEventListener('pointerup', () => { drag = null; stage.classList.remove('drag'); });
+      stage.addEventListener('pointermove', (ev) => {
+        if (!pts.has(ev.pointerId)) return;
+        pts.set(ev.pointerId, local(ev));
+        if (pinch && pts.size >= 2) {
+          const [a, b] = Array.from(pts.values());
+          const d = Math.hypot(b.x - a.x, b.y - a.y); const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+          const k = Math.min(3, Math.max(0.4, pinch.k0 * d / pinch.d0));
+          mapView.x = m.x - (pinch.m0.x - pinch.x0) * k / pinch.k0;
+          mapView.y = m.y - (pinch.m0.y - pinch.y0) * k / pinch.k0;
+          mapView.k = k; mapView.fitted = true; apply();
+        } else if (drag) {
+          const p = pts.get(ev.pointerId);
+          mapView.x = p.x - drag.x; mapView.y = p.y - drag.y; mapView.fitted = true; apply();
+        }
+      });
+      const lift = (ev) => {
+        if (!pts.delete(ev.pointerId)) return;
+        pinch = null;
+        if (pts.size === 1) startDrag(); else if (pts.size === 0) { drag = null; stage.classList.remove('drag'); }
+        else startPinch();
+      };
+      stage.addEventListener('pointerup', lift);
+      stage.addEventListener('pointercancel', lift);
       stage.addEventListener('wheel', (ev) => {
         ev.preventDefault();
         const r = stage.getBoundingClientRect();
+        mapView.fitted = true;
         zoomAt(ev.deltaY < 0 ? 1.12 : 1 / 1.12, ev.clientX - r.left, ev.clientY - r.top);
       }, { passive: false });
+      const fit = () => {
+        const box = fit217(nodes.filter(shown).map((n) => pos[n.device_id]).filter(Boolean).concat([pos.server]), stage.clientWidth, stage.clientHeight);
+        if (!box) return;
+        mapView.x = box.x; mapView.y = box.y; mapView.k = box.k; apply();
+      };
       el.querySelectorAll('[data-map-zoom]').forEach((b) => b.addEventListener('click', () => {
         const r = stage.getBoundingClientRect();
         const z = b.getAttribute('data-map-zoom');
-        if (z === 'centre') { mapView.x = 0; mapView.y = 0; mapView.k = Math.min(1, r.width / 1000); apply(); return; }
+        if (z === 'fit') { mapView.fitted = false; fit(); return; }
+        mapView.fitted = true;
         zoomAt(z === 'in' ? 1.25 : 0.8, r.width / 2, r.height / 2);
       }));
-      el.querySelectorAll('[data-map-filter]').forEach((b) => b.addEventListener('click', () => { mapView.filter = b.getAttribute('data-map-filter'); this.mount(el, ctx, true); }));
+      // Motion stops while the tab is hidden (reduce-motion is handled in CSS).
+      const svg = el.querySelector('.map216-world > svg');
+      const motion = () => {
+        const hidden = !!document.hidden;
+        stage.classList.toggle('paused', hidden);
+        if (svg && svg.pauseAnimations) { try { if (hidden) svg.pauseAnimations(); else svg.unpauseAnimations(); } catch (_) { /* jsdom */ } }
+      };
+      motion();
+      if (mapView.offMotion) document.removeEventListener('visibilitychange', mapView.offMotion);
+      mapView.offMotion = motion;
+      document.addEventListener('visibilitychange', motion);
+      if (mapView.offResize) window.removeEventListener('resize', mapView.offResize);
+      let resizeTimer = 0;
+      mapView.offResize = () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => { if (!mapView.fitted && stage.isConnected) fit(); }, 150);
+      };
+      window.addEventListener('resize', mapView.offResize);
+      el.querySelectorAll('[data-map-filter]').forEach((b) => b.addEventListener('click', () => { mapView.filter = b.getAttribute('data-map-filter'); mapView.fitted = false; this.mount(el, ctx, true); }));
       el.querySelectorAll('[data-map-pick]').forEach((b) => b.addEventListener('click', (ev) => {
         ev.preventDefault();
         const id = b.getAttribute('data-map-pick');
         mapView.pick = id && mapView.pick !== id ? id : '';
         this.mount(el, ctx, true);
       }));
-      if (!quiet && mapView.k === 1 && stage.clientWidth && stage.clientWidth < 1000) {
-        mapView.k = stage.clientWidth / 1000; apply();
-      }
+      if (!quiet || !mapView.fitted) fit();
     },
   };
 
@@ -1795,9 +1894,8 @@ LL.views = {};
       const ruleText = rule
         ? `Below build ${ui.esc(rule.min_build)} (${ui.esc(rule.min_version)}): ${rule.mode === 'warn' ? 'warn only' : 'stop from ' + ui.esc(rule.stop_at)}${rule.very_old ? ' · very old apps stopped' : ''} · by ${ui.esc(rule.by)}`
         : 'None set';
-      const rows = builds.length
-        ? builds.map((b) => `<tr><td>${ui.esc(b.build)}</td><td>${ui.esc(b.devices)}</td><td>${ui.esc(b.last_seen)}</td></tr>`).join('')
-        : `<tr><td colspan="3">${ui.esc('No phone has sent its build yet (apps from 3.0.54 do).')}</td></tr>`;
+      // Bundle 217: ui.table so a phone shows each build as a card.
+      const rows = builds.map((b) => [ui.esc(b.build), ui.esc(b.devices), ui.esc(b.last_seen)]);
       el.innerHTML = `
         <div class="section">
           ${ui.sectionHead({ title: 'App version', subtitle: 'Old phones get a warning, then can only read chats until they update', icon: 'i-devices' })}
@@ -1822,7 +1920,7 @@ LL.views = {};
               </div>
             </form>`,
           })}
-          ${ui.panel({ title: 'Phones by build', subtitle: 'Last 30 days', body: `<table class="table"><thead><tr><th>Build</th><th>Phones</th><th>Last seen</th></tr></thead><tbody>${rows}</tbody></table>` })}
+          ${ui.panel({ title: 'Phones by build', subtitle: 'Last 30 days', body: ui.table({ columns: [{ label: 'Build' }, { label: 'Phones' }, { label: 'Last seen' }], rows, emptyTitle: 'No builds yet', emptyMessage: 'No phone has sent its build yet (apps from 3.0.54 do).' }) })}
         </div>`;
     },
   };

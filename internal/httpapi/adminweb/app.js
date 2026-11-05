@@ -264,13 +264,15 @@
     const session = state.session || { username: '—', role: '—', expires_at: null };
     const host = $('overlays');
     host.innerHTML = `<div class="menu" role="menu" data-overlay="identity">
-      <div class="menu-identity">
-        <strong>${ui.esc(session.username || '—')}</strong>
-        <span>${ui.esc(fmt.titleCase(session.role))}${session.username ? ' · signed in until you sign out' : ''}</span>
+      <div class="menu-identity menu-identity217">
+        ${ui.avatar216({ userId: session.user_id || '', name: session.username || '?', hasAvatar: !!session.has_avatar, admin: true, size: 40 })}
+        <span class="menu-who"><strong>${ui.esc(session.username || '—')}</strong>
+        <span>${ui.esc(fmt.titleCase(session.role))}${session.username ? ' · signed in until you sign out' : ''}</span></span>
       </div>
       <button class="menu-item" data-menu="refresh" role="menuitem">${ui.icon('i-refresh')}Refresh data</button>
       <button class="menu-item" data-menu="theme" role="menuitem">${ui.icon('i-sun')}Toggle light / dark</button>
       <button class="menu-item" data-menu="privacy" role="menuitem">${ui.icon('i-privacy')}Privacy & access</button>
+      <div class="menu-divider" role="separator"></div>
       <button class="menu-item danger" data-menu="logout" role="menuitem">${ui.icon('i-logout')}Sign out</button>
     </div>`;
     $('identity-button').setAttribute('aria-expanded', 'true');
@@ -676,7 +678,7 @@
     // Bundle 216: every signed-in admin wears crown A next to the name.
     $('identity-initial').classList.add('has-crown');
     if (!document.getElementById('identity-crown')) {
-      $('identity-initial').insertAdjacentHTML('beforeend', `<span id="identity-crown" class="av216-crown">${ui.crown216(13)}</span>`);
+      $('identity-initial').insertAdjacentHTML('beforeend', `<span id="identity-crown" class="av216-crown">${ui.crown216(15)}</span>`);
     }
     const stored = localStorage.getItem('locallink_admin_view');
     const start = stored && LL.views[stored] ? stored : 'dashboard';
@@ -745,7 +747,8 @@
   // ------------------------------------------------------------------ events
   document.addEventListener('click', async (event) => {
     // Clicks inside an overlay, or on the button that owns one, must not close it.
-    if (event.target.closest('.panel-pop, .menu, .search-panel, [data-overlay-trigger]')) {
+    // Bundle 217: the drawer button and the drawer itself must not shut the drawer.
+    if (event.target.closest('.panel-pop, .menu, .search-panel, [data-overlay-trigger], #menu-toggle, #sidebar')) {
       // fall through to the button handlers below
     } else if (!event.target.closest('[data-nav],[data-range],[data-retry],[data-overlay-close],[data-menu],[data-user-status],[data-user-devices],[data-device-revoke],[data-device-rename],[data-device-policy],[data-session-revoke],[data-recovery],[data-action],[data-topology],[data-collapse],[data-clear-filters]')) {
       closeOverlays();
@@ -1140,10 +1143,22 @@
     app.classList.toggle('drawer-open', open);
     $('drawer-scrim').classList.toggle('hidden', !open);
   });
-  $('drawer-scrim').addEventListener('click', () => {
+  const closeDrawer217 = () => {
     $('app').classList.remove('drawer-open');
     $('drawer-scrim').classList.add('hidden');
+  };
+  $('drawer-scrim').addEventListener('click', closeDrawer217);
+  // Bundle 217: X in the drawer head and a left swipe close the drawer too.
+  $('drawer-close').addEventListener('click', closeDrawer217);
+  let swipe217 = null;
+  $('sidebar').addEventListener('pointerdown', (ev) => { swipe217 = { x: ev.clientX, y: ev.clientY }; });
+  $('sidebar').addEventListener('pointerup', (ev) => {
+    if (!swipe217) return;
+    const dx = ev.clientX - swipe217.x; const dy = ev.clientY - swipe217.y;
+    swipe217 = null;
+    if (dx < -60 && Math.abs(dy) < Math.abs(dx) && $('app').classList.contains('drawer-open')) closeDrawer217();
   });
+  $('sidebar').addEventListener('pointercancel', () => { swipe217 = null; });
 
   // -------------------------------------------------------------- polling
   let pollTimer = null;
