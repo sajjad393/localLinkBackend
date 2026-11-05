@@ -220,6 +220,7 @@ func (a *API) AdminBlocksSync(w http.ResponseWriter, r *http.Request) {
 		}
 		if ok, err := a.applyAdminBlock(rec, blob); err == nil && ok {
 			applied++
+			a.adminActionForBlockRecord(rec, blob) // Bundle 220
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -253,4 +254,64 @@ func (a *API) AdminBlocksMine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"record": b})
+}
+
+// carryOfflineBlock218 (Bundle 218): a block made while the person was a
+// phone-only account (record on offline_x, or on her phone id) follows her
+// to the real account when she joins the server.
+func (a *API) carryOfflineBlock218(userID, offlineID, deviceID string) {
+	rows, err := a.store.DB().Query(`SELECT target_user_id,action,seq,at,record_id,body FROM admin_blocks LIMIT ?`, maxAdminBlockRecords)
+	if err != nil {
+		return
+	}
+	type row struct {
+		target, action, at, id, body string
+		seq                          int64
+	}
+	var all []row
+	for rows.Next() {
+		var x row
+		if rows.Scan(&x.target, &x.action, &x.seq, &x.at, &x.id, &x.body) == nil {
+			all = append(all, x)
+		}
+	}
+	rows.Close()
+	var best *row
+	var mine *row
+	for i := range all {
+		x := &all[i]
+		if x.target == userID {
+			mine = x
+			continue
+		}
+		hit := x.target == offlineID
+		if !hit && deviceID != "" {
+			var body adminBlockBody
+			if json.Unmarshal([]byte(x.body), &body) == nil {
+				for _, d := range body.TargetDevices {
+					if d == deviceID {
+						hit = true
+						break
+					}
+				}
+			}
+		}
+		if hit && (best == nil || adminBlockNewer(x.seq, x.at, x.id, best.seq, best.at, best.id)) {
+			best = x
+		}
+	}
+	if best == nil || best.action != "block" {
+		return
+	}
+	if mine != nil {
+		mt, _ := time.Parse(time.RFC3339Nano, mine.at)
+		bt, _ := time.Parse(time.RFC3339Nano, best.at)
+		if mt.After(bt) {
+			return
+		}
+	}
+	if err := a.serverAdminBlock(userID, "block", "auto: blocked while offline"); err != nil {
+		return
+	}
+	a.adminAudit("server", "admin_block_carry", userID, "from="+offlineID)
 }

@@ -1294,6 +1294,75 @@ func orderedMigrationSpecs() []orderedMigrationSpec {
 			);`)
 			return err
 		},
+	}, {
+		// Bundle 218: a phone-only account (offline_<12 hex>) that joined the
+		// server, so friends' phones can follow it to the real account.
+		Version:     58,
+		Name:        "offline-ids",
+		Checksum:    "locallink-offline-ids-v1",
+		Predecessor: 57,
+		Apply: func(tx *sql.Tx) error {
+			_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS offline_ids (
+				offline_id TEXT PRIMARY KEY,
+				user_id TEXT NOT NULL,
+				device_id TEXT NOT NULL,
+				linked_at TEXT NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_offline_ids_user ON offline_ids(user_id);
+			CREATE INDEX IF NOT EXISTS idx_offline_ids_device ON offline_ids(device_id);`)
+			return err
+		},
+	}, {
+		// Bundle 220: every admin action is a signed card that goes to all
+		// phones; the target phone sends a signed "done" receipt back.
+		Version:     59,
+		Name:        "admin-actions",
+		Checksum:    "locallink-admin-actions-v1",
+		Predecessor: 58,
+		Apply: func(tx *sql.Tx) error {
+			_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS admin_actions (
+				id TEXT PRIMARY KEY,
+				action TEXT NOT NULL,
+				body TEXT NOT NULL,
+				sig TEXT NOT NULL,
+				signer TEXT NOT NULL,
+				made_by TEXT NOT NULL DEFAULT '',
+				made_at TEXT NOT NULL,
+				need INTEGER NOT NULL DEFAULT 0,
+				done INTEGER NOT NULL DEFAULT 0,
+				state TEXT NOT NULL DEFAULT 'pending',
+				parent TEXT NOT NULL DEFAULT '',
+				target_label TEXT NOT NULL DEFAULT '',
+				targets_json TEXT NOT NULL DEFAULT '[]',
+				detail TEXT NOT NULL DEFAULT '',
+				offline INTEGER NOT NULL DEFAULT 0,
+				finished_at TEXT,
+				cancelled_at TEXT,
+				state_body TEXT NOT NULL DEFAULT '',
+				state_sig TEXT NOT NULL DEFAULT ''
+			);
+			CREATE INDEX IF NOT EXISTS idx_admin_actions_state ON admin_actions(state, made_at);
+			CREATE INDEX IF NOT EXISTS idx_admin_actions_parent ON admin_actions(parent);
+			CREATE TABLE IF NOT EXISTS admin_action_receipts (
+				action_id TEXT NOT NULL,
+				device_id TEXT NOT NULL,
+				result TEXT NOT NULL,
+				at TEXT NOT NULL,
+				body TEXT NOT NULL,
+				sig TEXT NOT NULL,
+				via TEXT NOT NULL DEFAULT '',
+				verified INTEGER NOT NULL DEFAULT 0,
+				received_at TEXT NOT NULL,
+				PRIMARY KEY(action_id, device_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_admin_action_receipts_device ON admin_action_receipts(device_id, verified);
+			CREATE TABLE IF NOT EXISTS device_signing_keys (
+				device_id TEXT PRIMARY KEY,
+				signing_key TEXT NOT NULL,
+				first_seen_at TEXT NOT NULL
+			);`)
+			return err
+		},
 	}}
 }
 

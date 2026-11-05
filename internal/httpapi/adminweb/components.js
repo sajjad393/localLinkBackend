@@ -311,7 +311,7 @@ window.LL = window.LL || {};
 
   // Bundle 219: shimmer shaped like the page that is loading (refresh and
   // page switch). Unknown pages keep the plain panel.
-  const LIST219 = ['users', 'devices', 'sessions', 'audit', 'security', 'recovery'];
+  const LIST219 = ['users', 'devices', 'sessions', 'audit', 'security', 'recovery', 'actions'];
   function bootSkeleton219(viewId) {
     const sk = (cls) => `<span class="skeleton ${cls || ''}"></span>`;
     const row = (cells) => `<div class="sk219-row">${sk('sk219-circle')}<div class="sk219-lines">${sk()}${sk()}</div>${cells}</div>`;

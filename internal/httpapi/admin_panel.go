@@ -23,6 +23,8 @@ type AdminUser struct {
 	DisplayName string `json:"display_name,omitempty"`
 	HasAvatar   bool   `json:"has_avatar"`
 	LastSeenAt  string `json:"last_seen_at,omitempty"`
+	// Bundle 218: when this account joined from a phone-only account.
+	JoinedOfflineAt string `json:"joined_offline_at,omitempty"`
 }
 
 type AdminAuthSession struct {
@@ -218,9 +220,10 @@ func (a *API) AdminSetUserStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if status == "suspended" && before != "suspended" {
 		_ = a.serverAdminBlock(id, "block", admin.Username)
-	} else if status == "active" && before == "suspended" {
+	} else if status == "active" && (before == "suspended" || before == "disabled") {
 		_ = a.serverAdminBlock(id, "unblock", admin.Username)
 	}
+	a.adminActionForStatus(id, before, status, admin) // Bundle 220
 	a.adminAudit(admin.ID, "set_user_status", id, "status="+status)
 	a.auditSecurity("admin_user_status_changed", id, "", registrationKey(r), "status="+status)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": status})
@@ -302,6 +305,7 @@ func (a *API) AdminRevokeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.adminAudit(admin.ID, "revoke_session", id, "user session revoked")
+	a.adminActionForSession(id, admin) // Bundle 220
 	a.auditSecurity("session_revoked", "", "", registrationKey(r), "admin revoked user session")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "revoked": true})
 }

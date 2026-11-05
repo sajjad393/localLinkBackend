@@ -1933,7 +1933,153 @@ LL.views = {};
   };
 
   // Bundle 216: sidebar order People / Network / Safety / System.
-  LL.views = { dashboard, users, devices, sessions, map, network, calls, transfers, recovery, security, audit, conversations, appversion, diagnostics, settings, privacy };
+  // ------------------------------------------------------------ admin actions
+  // Bundle 220: every admin action goes to all phones. Pending until the
+  // target phone does it and sends its signed Done; no time limit.
+  const ACTION_WORDS_220 = {
+    block: 'Block', unblock: 'Unblock', off: 'Off (account closed)', active: 'Active again',
+    sign_out: 'Sign out', remove_phone: 'Remove phone', rename_phone: 'Rename phone',
+  };
+  const ACTION_PERM_220 = {
+    block: 'manageUsers', unblock: 'manageUsers', off: 'manageUsers', active: 'manageUsers',
+    wifi_rule: 'manageNetworkPolicy', sign_out: 'manageSessions', remove_phone: 'manageDevices',
+    admin_badge: 'manageSettings',
+  };
+  function day220(iso) {
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  }
+  function made220(iso) {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) {
+      return 'today ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+    return day220(iso);
+  }
+  function title220(a) {
+    const d = String(a.detail || '');
+    if (a.action === 'wifi_rule') {
+      const v = d.replace(/^wifi=/, '');
+      const rule = WIFI_RULES_216.filter((r) => r.value === v)[0];
+      return 'Wi-Fi rule: ' + (rule ? rule.label : (v || 'Default'));
+    }
+    if (a.action === 'admin_badge') {
+      if (d === 'admin removed') return 'Remove admin';
+      const role = d.replace(/^role=/, '');
+      return 'Make admin' + (role ? ' (' + (ui.LEVELS_216[role] || fmt.titleCase(role)) + ')' : '');
+    }
+    if (a.action === 'version_rule') {
+      const m = /^(\S+) below (\S+)/.exec(d);
+      if (!m) return 'Old app rule';
+      return 'Old app ' + (m[1] === 'warn' ? 'Warn' : 'Stop') + ' (< ' + m[2] + ')';
+    }
+    return ACTION_WORDS_220[a.action] || fmt.titleCase(String(a.action || '').replace(/_/g, ' '));
+  }
+  function via220(v) {
+    return v === 'server' ? 'via the server' : (v === 'carried' ? 'carried by phones' : '');
+  }
+  function status220(a) {
+    const phones = Array.isArray(a.phones) ? a.phones : [];
+    const need = num(a.need);
+    const done = num(a.done);
+    if (a.state === 'cancelled') return { pill: ui.pill216('Cancelled', 'grey'), sub: 'cancelled ' + day220(a.finished_at) };
+    if (a.server_only) return { pill: ui.pill216('Done at once', 'green'), sub: 'server only' };
+    if (a.action === 'version_rule') {
+      const reached = ui.pill216('Reached ' + fmt.number(num(a.reached)) + ' phones', 'grey');
+      return { pill: reached, sub: a.state === 'replaced' ? 'a newer rule took over' : 'no single target' };
+    }
+    if (a.state === 'done' || a.state === 'replaced') {
+      const parts = [via220(a.via), need > 1 ? (done + ' of ' + need + ' phones') : ''].filter(Boolean);
+      return { pill: ui.pill216('Done ' + day220(a.finished_at), 'green'), sub: parts.join(' \u00b7 ') };
+    }
+    if (need > 1 && done > 0) {
+      const names = phones.map((p) => (p.name || 'Phone') + (p.result ? ' done' : ' pending'));
+      return { pill: ui.pill216(done + ' of ' + need + ' phones', 'blue'), sub: names.join(' \u00b7 ') };
+    }
+    if (num(a.old_app) > 0 && done === 0) {
+      return { pill: ui.pill216('Pending \u00b7 old app', 'red'), sub: "the app is too old to answer \u00b7 ask to update" };
+    }
+    return { pill: ui.pill216('Pending', 'orange'), sub: 'since ' + day220(a.made_at) + ' \u00b7 ' + (done ? done + ' reached' : 'no phone reached yet') };
+  }
+
+  const actions = {
+    id: 'actions',
+    title: 'Admin actions',
+    subtitle: 'Every admin action goes to all phones. Pending until the target phone does it.',
+    icon: 'i-flag',
+    group: 'Safety',
+    navCount: 'admin_actions_pending',
+    // Every 30 s while open: patch in place (no shimmer).
+    async refresh(el, ctx) {
+      await actions.mount(el, ctx, true);
+      return true;
+    },
+    async mount(el, ctx, quiet) {
+      if (!quiet) el.innerHTML = ui.bootSkeleton219('actions');
+      const result = await settle(ctx.api('/api/v1/admin/actions?state=all'));
+      if (!result.ok) { el.innerHTML = ui.panel({ title: 'Admin actions', body: ui.errorState(result.error, 'actions') }); return; }
+      const all = Array.isArray(result.data.actions) ? result.data.actions : [];
+      const isDone = (a) => a.state === 'done' || a.state === 'replaced';
+      const pending = all.filter((a) => a.state === 'pending' && a.action !== 'version_rule');
+      const finished = all.filter(isDone);
+      const tab = ctx.state.filters.actions220 || 'all';
+      const list = tab === 'pending' ? pending : (tab === 'done' ? finished : all);
+      const rows = list.map((a) => {
+        const st = status220(a);
+        const perm = ACTION_PERM_220[a.action];
+        const canCancel = a.state === 'pending' && perm && ctx.can(perm) && (a.action !== 'admin_badge' && a.action !== 'version_rule' || ctx.role === 'owner');
+        const by = (a.made_by || 'admin') + (a.offline ? ' (offline)' : ' (web)');
+        return [
+          `<div class="act220-t"><b>${ui.esc(title220(a))}</b></div>`,
+          `<span>${ui.esc(a.label || '\u2014')}</span>`,
+          `<div class="act220-s">${st.pill}${st.sub ? `<small>${ui.esc(st.sub)}</small>` : ''}</div>`,
+          `<span class="subtle">${ui.esc(made220(a.made_at) + ' \u00b7 ' + by)}</span>`,
+          canCancel ? `<button class="btn btn-sm" data-action220-cancel="${ui.esc(a.id)}">Cancel</button>` : '',
+        ];
+      });
+      el.innerHTML = `
+        <div class="section">
+          <div class="bar216">
+            ${ui.chips216([
+              { value: 'all', label: 'All ' + all.length },
+              { value: 'pending', label: 'Pending ' + pending.length },
+              { value: 'done', label: 'Done ' + finished.length },
+            ], tab, 'data-actions220-tab')}
+          </div>
+          ${ui.panel({
+            pad0: true,
+            body: rows.length
+              ? `<div style="padding:0 4px">${ui.table({ columns: [{ label: 'Action' }, { label: 'For' }, { label: 'Status' }, { label: 'Made' }, { label: '' }], rows })}</div>`
+              : `<div class="empty216">${tab === 'pending' ? 'Nothing is pending. Every action reached its phone.' : 'No admin actions yet.'}</div>`,
+          })}
+        </div>`;
+      el.querySelectorAll('[data-actions220-tab]').forEach((b) => b.addEventListener('click', () => {
+        ctx.state.filters.actions220 = b.getAttribute('data-actions220-tab');
+        ctx.refresh();
+      }));
+      el.querySelectorAll('[data-action220-cancel]').forEach((b) => b.addEventListener('click', async () => {
+        const id = b.getAttribute('data-action220-cancel');
+        const ok = await ctx.confirm({
+          title: 'Cancel this action?',
+          message: 'Phones that have not done it yet will not do it. Phones that already did it keep the change.',
+          confirmLabel: 'Cancel action', cancelLabel: 'Keep', destructive: true,
+        });
+        if (!ok) return;
+        b.disabled = true;
+        try {
+          await ctx.api('/api/v1/admin/actions/' + encodeURIComponent(id) + '/cancel', { method: 'POST' });
+          ctx.toast('Action cancelled', 'success');
+        } catch (err) {
+          ctx.toast(err.message || 'Could not cancel', 'error');
+        }
+        ctx.refresh();
+      }));
+    },
+  };
+
+  LL.views = { dashboard, users, devices, sessions, map, network, calls, transfers, recovery, security, audit, conversations, actions, appversion, diagnostics, settings, privacy };
 
   // Modules that are restricted to specific roles (used by quick actions too).
   LL.moduleRoles = { settings: ['owner'], conversations: ['owner'], appversion: ['owner'] };

@@ -1368,3 +1368,14 @@ td { height: 52px; border-bottom: 1px solid var(--border); }
   .sk219-list .sk219-row { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px; }
   .sk219-list.sk219-panel { background: none; border: 0; padding: 0; }
 }
+
+/* Bundle 220: Admin actions page */
+.act220-t b { font-weight: 600; }
+.act220-s { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.act220-s small { color: var(--text-secondary); font-size: 12px; line-height: 1.35; }
+@media (max-width: 640px) {
+  /* Bundle 220: status + its small line get their own row under the title */
+  .table-wrap tr:has(.act220-s) td.col-first { padding-right: 0; }
+  .table-wrap tr:has(.act220-s) td.col-status { position: static; grid-column: 1 / -1; order: -1; }
+  .table-wrap tr:has(.act220-s) td.col-first { order: -2; }
+}

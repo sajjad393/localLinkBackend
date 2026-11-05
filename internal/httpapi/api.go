@@ -769,6 +769,9 @@ func (a *API) setPresence(deviceID string, serverConnected, wifiDirectConnected 
 		previous.WiFiEnabled != next.WiFiEnabled
 	a.presence[deviceID] = next
 	a.presenceMu.Unlock()
+	if next.SigningPublicKey != "" && (!existed || previous.SigningPublicKey != next.SigningPublicKey) {
+		a.rememberSigningKey(deviceID, next.SigningPublicKey) // Bundle 220: checks "done" receipts
+	}
 	_, _ = a.store.DB().Exec(`UPDATE devices SET last_seen_at=? WHERE id=?`, now, deviceID)
 
 	var d Device
@@ -1133,6 +1136,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]any{"ok": false, "error": message})
+}
+
+// writeErrorCode (Bundle 218): the same answer plus a stable error_code the
+// app can switch on (old apps keep reading the text).
+func writeErrorCode(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, map[string]any{"ok": false, "error": message, "error_code": code})
 }
 
 func tokenHash(token string) string {

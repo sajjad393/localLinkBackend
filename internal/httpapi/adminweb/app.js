@@ -174,6 +174,9 @@
   }
 
   // ---------------------------------------------------------------- toasts
+  // Bundle 220: actions that now go to all phones say so.
+  const SENT_220 = ' \u00b7 Sent to all phones \u00b7 see Admin actions';
+
   function toast(message, tone) {
     const host = $('toast-host');
     const node = document.createElement('div');
@@ -827,7 +830,7 @@
       const status = target.value;
       try {
         await post(`/api/v1/admin/user/status?id=${encodeURIComponent(id)}&status=${encodeURIComponent(status)}`);
-        toast(`Account set to ${status}`);
+        toast(`Account set to ${status}` + SENT_220);
         mountView('users');
       } catch (err) { toast(err.message, 'error'); }
       return;
@@ -869,7 +872,7 @@
       if (!confirmed) return;
       try {
         await post(`/api/v1/admin/device/revoke?id=${encodeURIComponent(id)}`);
-        toast('Device revoked');
+        toast('Device revoked' + SENT_220);
         mountView('devices');
       } catch (err) { toast(err.message, 'error'); }
       return;
@@ -907,7 +910,7 @@
         await post(`/api/v1/admin/device/network-policy?id=${encodeURIComponent(id)}`, {
           wifi_radio_policy: words[chosen],
         });
-        toast('Wi-Fi rule saved');
+        toast('Wi-Fi rule saved' + SENT_220);
         mountView('devices');
       } catch (err) { toast(err.message, 'error'); }
       return;
@@ -927,7 +930,7 @@
       const path = kind === 'admin' ? '/api/v1/admin/admin-session/revoke' : '/api/v1/admin/session/revoke';
       try {
         await post(`${path}?id=${encodeURIComponent(id)}`);
-        toast('Session revoked');
+        toast(kind === 'admin' ? 'Session revoked' : 'Session revoked' + SENT_220);
         mountView('sessions');
       } catch (err) { toast(err.message, 'error'); }
       return;
@@ -1082,7 +1085,7 @@
     }
     try {
       await post('/api/v1/admin/user-admin', body);
-      toast(body.remove ? `${name} is no longer an admin` : `${name} is now an admin`);
+      toast((body.remove ? `${name} is no longer an admin` : `${name} is now an admin`) + SENT_220);
       state.people216 = null;
       mountView('users');
     } catch (err) { toast(err.message, 'error'); }
@@ -1092,7 +1095,7 @@
   async function saveVersionRule(body, note) {
     try {
       await post('/api/v1/admin/version-rule', body);
-      toast('Rule saved for everyone');
+      toast('Rule saved for everyone' + SENT_220);
       mountView('appversion');
     } catch (err) {
       toast(err.message, 'error');
@@ -1249,6 +1252,7 @@
 
       refreshSummary();
       if (state.view === 'dashboard') mountView('dashboard', { quiet: true, refresh: true });
+      if (state.view === 'actions') mountView('actions', { quiet: true, refresh: true }); // Bundle 220
     }, pollIntervalMs());
   }
 
@@ -1302,7 +1306,7 @@
       try {
         await post(`/api/v1/admin/user/network-policy?id=${encodeURIComponent(id)}`, { wifi_radio_policy: value || null });
         rule.parentElement.querySelectorAll('[data-wifi-rule]').forEach((b) => b.classList.toggle('on', b === rule));
-        toast('Wi-Fi rule saved');
+        toast('Wi-Fi rule saved' + SENT_220);
       } catch (err) { toast(err.message, 'error'); }
       return;
     }
@@ -1318,7 +1322,7 @@
         const data = await api('/api/v1/admin/sessions?limit=200');
         const mine = (Array.isArray(data.sessions) ? data.sessions : []).filter((x) => x.user_id === id && x.active);
         for (const x of mine) await post(`/api/v1/admin/session/revoke?id=${encodeURIComponent(x.id)}`);
-        toast(`Signed out ${mine.length} phone${mine.length === 1 ? '' : 's'}`);
+        toast(`Signed out ${mine.length} phone${mine.length === 1 ? '' : 's'}` + (mine.length ? SENT_220 : ''));
       } catch (err) { toast(err.message, 'error'); }
     }
   });

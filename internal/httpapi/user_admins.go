@@ -163,6 +163,7 @@ func (a *API) removeLinkedAdmin(userID, by string) bool {
 	a.endCertsForAdmin(adminID)
 	_, _ = a.serverAdminBadge(userID, role, false, by)
 	a.notifyAdminRole(userID)
+	a.adminActionForUser("admin_badge", userID, AdminAccount{Username: by}, a.currentBadgeBlob(userID), nil, "admin removed") // Bundle 220
 	return true
 }
 
@@ -255,6 +256,7 @@ func (a *API) AdminSetUserAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.notifyAdminRole(in.UserID)
+	a.adminActionForUser("admin_badge", in.UserID, admin, a.currentBadgeBlob(in.UserID), nil, "role="+in.Role) // Bundle 220
 	action := "user_admin_made"
 	if linked && curStatus == "active" {
 		action = "user_admin_level"

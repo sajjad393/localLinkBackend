@@ -86,6 +86,7 @@ func (a *API) AdminUpdateUserNetworkPolicy(w http.ResponseWriter, r *http.Reques
 	}
 	a.adminAudit(admin.ID, "update_user_network_policy", userID, "wifi_radio_policy="+wifi)
 	a.pushNetworkPolicyToUser(userID)
+	a.adminActionForUser("wifi_rule", userID, admin, nil, a.wifiDetail, "wifi="+wifi) // Bundle 220
 	p2, _ := a.userNetworkPolicy(userID)
 	writeJSON(w, http.StatusOK, p2)
 }
@@ -135,6 +136,7 @@ func (a *API) AdminUpdateDeviceNetworkPolicy(w http.ResponseWriter, r *http.Requ
 	}
 	a.adminAudit(admin.ID, "update_device_network_policy", deviceID, "wifi_radio_policy="+wifi)
 	a.pushNetworkPolicyToDevice(deviceID)
+	a.adminActionForDevice("wifi_rule", deviceID, admin, a.wifiDetail(deviceID), "wifi="+wifi) // Bundle 220
 	p2, _ := a.effectiveNetworkPolicy(deviceID)
 	writeJSON(w, http.StatusOK, p2)
 }

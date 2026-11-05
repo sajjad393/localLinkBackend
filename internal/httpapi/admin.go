@@ -23,6 +23,8 @@ type AdminSummary struct {
 	ActiveSessions    int   `json:"active_sessions"`
 	PendingRecoveries int   `json:"pending_recoveries"`
 	SecurityAlerts    int   `json:"security_alerts"`
+	// Bundle 220: number beside "Admin actions" in the menu.
+	AdminActionsPending int `json:"admin_actions_pending"`
 }
 
 type AdminDevice struct {
@@ -100,6 +102,7 @@ func (a *API) AdminSummary(w http.ResponseWriter, r *http.Request) {
 	_ = a.store.DB().QueryRow("SELECT COUNT(*) FROM auth_sessions WHERE revoked_at IS NULL AND expires_at > ?", time.Now().UTC().Format(time.RFC3339Nano)).Scan(&s.ActiveSessions)
 	_ = a.store.DB().QueryRow("SELECT COUNT(*) FROM account_recovery_requests WHERE status='pending' AND expires_at > ?", time.Now().UTC().Format(time.RFC3339Nano)).Scan(&s.PendingRecoveries)
 	_ = a.store.DB().QueryRow("SELECT COUNT(*) FROM security_audit WHERE created_at >= ?", time.Now().UTC().Add(-24*time.Hour).Format(time.RFC3339Nano)).Scan(&s.SecurityAlerts)
+	_ = a.store.DB().QueryRow("SELECT COUNT(*) FROM admin_actions WHERE parent='' AND action!='cancel' AND state='pending'").Scan(&s.AdminActionsPending)
 	if info, err := os.Stat(getenvOr(a.dbPath(), "")); err == nil {
 		s.DBBytes = info.Size()
 	}
@@ -400,6 +403,7 @@ func (a *API) AdminRenameDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.adminAudit(admin.ID, "rename_device", id, "name="+name)
+	a.adminActionServerOnly("rename_phone", id, admin, "new name: "+name) // Bundle 220
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -437,6 +441,7 @@ func (a *API) AdminRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	delete(a.presence, id)
 	a.presenceMu.Unlock()
 	a.adminAudit(admin.ID, "revoke_device", id, "soft-revoked")
+	a.adminActionForDevice("remove_phone", id, admin, nil, "") // Bundle 220
 	a.auditSecurity("device_revoked", "", id, registrationKey(r), "admin revoke")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "revoked": true})
 }

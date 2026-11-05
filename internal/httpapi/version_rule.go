@@ -346,5 +346,6 @@ func (a *API) AdminSetVersionRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to save rule")
 		return
 	}
+	a.adminActionForVersionRule(rec, blob, admin) // Bundle 220
 	writeJSON(w, http.StatusOK, map[string]any{"rule": blob, "seq": rec.Seq})
 }

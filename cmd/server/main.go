@@ -89,6 +89,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/devices", api.ListDevices)
 	mux.HandleFunc("GET /api/v1/account/contacts", api.ListAccountContacts)
 	mux.HandleFunc("POST /api/v1/account/contacts", api.AddAccountContact)
+	mux.HandleFunc("POST /api/v1/users/resolve", api.ResolveUsers218)
 	mux.HandleFunc("DELETE /api/v1/account/contacts/{user_id}", api.RemoveAccountContact)
 	mux.HandleFunc("GET /api/v1/account/devices", api.ListAccountDevices)
 	mux.HandleFunc("POST /api/v1/account/devices/revoke", api.RevokeAccountDevice)
@@ -150,6 +151,11 @@ func main() {
 	mux.HandleFunc("POST /api/v1/admin/offline-cert", api.AdminOfflineCert)
 	mux.HandleFunc("POST /api/v1/admin-blocks/sync", api.AdminBlocksSync)
 	mux.HandleFunc("POST /api/v1/admin-blocks/mine", api.AdminBlocksMine)
+	// Bundle 220: admin actions go to all phones.
+	mux.HandleFunc("POST /api/v1/admin-actions/sync", api.AdminActionsSync)
+	mux.HandleFunc("POST /api/v1/admin-actions/mine", api.AdminActionsMine)
+	mux.HandleFunc("GET /api/v1/admin/actions", api.AdminActionsList)
+	mux.HandleFunc("POST /api/v1/admin/actions/{id}/cancel", api.AdminActionCancel)
 	// Bundle 213: minimum app version.
 	mux.HandleFunc("GET /api/v1/version-rule", api.VersionRule)
 	mux.HandleFunc("POST /api/v1/version-rule/sync", api.VersionRuleSync)
