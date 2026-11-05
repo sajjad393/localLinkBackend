@@ -606,6 +606,7 @@ func (a *API) RevokeAccountDevice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to commit device revocation")
 		return
 	}
+	a.endDeviceAdminSessions(id) // Bundle 214
 	a.hub.CloseDevice(id)
 	a.presenceMu.Lock()
 	delete(a.presence, id)

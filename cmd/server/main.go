@@ -143,6 +143,20 @@ func main() {
 	mux.HandleFunc("GET /api/v1/device/network-policy", api.DeviceGetNetworkPolicy)
 	mux.HandleFunc("POST /api/v1/admin/backup", api.AdminBackup)
 	mux.HandleFunc("POST /api/v1/admin/logout", api.AdminLogout)
+	// Bundle 212: offline admin blocks.
+	mux.HandleFunc("GET /api/v1/trust", api.Trust)
+	mux.HandleFunc("POST /api/v1/admin/offline-cert", api.AdminOfflineCert)
+	mux.HandleFunc("POST /api/v1/admin-blocks/sync", api.AdminBlocksSync)
+	mux.HandleFunc("POST /api/v1/admin-blocks/mine", api.AdminBlocksMine)
+	// Bundle 213: minimum app version.
+	mux.HandleFunc("GET /api/v1/version-rule", api.VersionRule)
+	mux.HandleFunc("POST /api/v1/version-rule/sync", api.VersionRuleSync)
+	mux.HandleFunc("GET /api/v1/admin/version-rule", api.AdminGetVersionRule)
+	mux.HandleFunc("POST /api/v1/admin/version-rule", api.AdminSetVersionRule)
+	// Bundle 214: app users as admins (crown, no admin login in the app).
+	mux.HandleFunc("POST /api/v1/admin/user-admin", api.AdminSetUserAdmin)
+	mux.HandleFunc("POST /api/v1/admin/device-session", api.AdminDeviceSession)
+	mux.HandleFunc("GET /api/v1/admin-badges", api.AdminBadges)
 	mux.HandleFunc("GET /api/v1/groups", api.ListGroups)
 	mux.Handle("POST /api/v1/groups", api.WithIdempotency("group-create", http.HandlerFunc(api.CreateGroup)))
 	mux.HandleFunc("GET /api/v1/groups/members", api.GroupMembers)
@@ -179,7 +193,7 @@ func main() {
 
 	// Apply a defensive generic request-body cap to JSON/form requests.
 	// Multipart upload handlers enforce their own larger file-specific limits.
-	limitedHandler := limitRequestBody(mux)
+	limitedHandler := limitRequestBody(api.VersionGate(mux)) // Bundle 213: version gate
 	metrics := newRuntimeMetrics()
 	api.SetRuntimeDiagnosticsProvider(metrics.snapshot)
 

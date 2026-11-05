@@ -17,6 +17,8 @@ type AdminUser struct {
 	LockedUntil     string `json:"locked_until,omitempty"`
 	Devices         int    `json:"devices"`
 	OnlineDevices   int    `json:"online_devices"`
+	// Bundle 214: "" or the admin level of an app user made admin.
+	AdminRole string `json:"admin_role"`
 }
 
 type AdminAuthSession struct {
@@ -125,7 +127,8 @@ func (a *API) AdminUsers(w http.ResponseWriter, r *http.Request) {
         SELECT u.id,u.username,COALESCE(u.status,'active'),u.created_at,u.updated_at,
                COALESCE(u.last_failed_login_at,''),COALESCE(u.locked_until,''),
                COUNT(DISTINCT d.id),
-               SUM(CASE WHEN COALESCE(d.status,'active')='active' AND d.last_seen_at >= ? THEN 1 ELSE 0 END)
+               SUM(CASE WHEN COALESCE(d.status,'active')='active' AND d.last_seen_at >= ? THEN 1 ELSE 0 END),
+               COALESCE((SELECT aa.role FROM admin_accounts aa WHERE aa.user_id=u.id AND aa.status='active'),'')
         FROM users u
         LEFT JOIN devices d ON d.user_id=u.id`+where+`
         GROUP BY u.id ORDER BY u.username COLLATE NOCASE,u.id LIMIT ?`, append([]any{time.Now().UTC().Add(-2 * time.Minute).Format(time.RFC3339Nano)}, args...)...)
@@ -137,7 +140,7 @@ func (a *API) AdminUsers(w http.ResponseWriter, r *http.Request) {
 	out := make([]AdminUser, 0, params.Limit)
 	for rows.Next() {
 		var u AdminUser
-		if err := rows.Scan(&u.ID, &u.Username, &u.Status, &u.CreatedAt, &u.UpdatedAt, &u.LastFailedLogin, &u.LockedUntil, &u.Devices, &u.OnlineDevices); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Status, &u.CreatedAt, &u.UpdatedAt, &u.LastFailedLogin, &u.LockedUntil, &u.Devices, &u.OnlineDevices, &u.AdminRole); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read user")
 			return
 		}
@@ -175,6 +178,8 @@ func (a *API) AdminSetUserStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var before string
+	_ = a.store.DB().QueryRow(`SELECT status FROM users WHERE id=?`, id).Scan(&before)
 	res, err := a.store.DB().Exec(`UPDATE users SET status=?,updated_at=? WHERE id=?`, status, now, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update user status")
@@ -184,8 +189,19 @@ func (a *API) AdminSetUserStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	if status != "active" {
+	// Bundle 212: suspend / unsuspend becomes a server-signed block record so
+	// phones learn it with no internet too. Suspended phones keep their
+	// sign-in (an unsuspend brings them straight back); only "disabled"
+	// still ends every session.
+	if status == "disabled" {
 		_, _ = a.store.DB().Exec(`UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL`, now, id)
+		// Bundle 214: a disabled account is no longer an admin.
+		a.removeLinkedAdmin(id, admin.Username)
+	}
+	if status == "suspended" && before != "suspended" {
+		_ = a.serverAdminBlock(id, "block", admin.Username)
+	} else if status == "active" && before == "suspended" {
+		_ = a.serverAdminBlock(id, "unblock", admin.Username)
 	}
 	a.adminAudit(admin.ID, "set_user_status", id, "status="+status)
 	a.auditSecurity("admin_user_status_changed", id, "", registrationKey(r), "status="+status)
@@ -344,6 +360,8 @@ func (a *API) AdminRevokeAdminSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "admin session not found or already revoked")
 		return
 	}
+	// Bundle 212: a revoke also ends that sign-in's offline key.
+	a.endCertsForSessionID(id)
 	a.adminAudit(admin.ID, "revoke_admin_session", id, "admin session revoked")
 	a.auditSecurity("admin_session_revoked", "", "", registrationKey(r), "admin revoked admin session")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "revoked": true})

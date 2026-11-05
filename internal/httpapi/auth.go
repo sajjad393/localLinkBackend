@@ -357,6 +357,7 @@ func (a *API) LogoutAccount(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, _ = a.store.DB().Exec(`UPDATE auth_sessions SET revoked_at=? WHERE device_id=? AND token_hash=? AND revoked_at IS NULL`, now, deviceID, tokenHash(token))
 	_, _ = a.store.DB().Exec(`UPDATE devices SET token_hash=NULL WHERE id=?`, deviceID)
+	a.endDeviceAdminSessions(deviceID) // Bundle 214
 	a.hub.CloseDevice(deviceID)
 	d, _ := a.setPresence(deviceID, false, false, DevicePresence{})
 	a.broadcastPresence(deviceID, d)

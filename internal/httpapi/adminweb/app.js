@@ -35,11 +35,13 @@
   const RANGES = ['24h', '7d', '30d', '90d'];
 
   const state = {
-    token: sessionStorage.getItem(TOKEN_KEY) || '',
+    // Bundle 211: stays signed in after the tab closes (ends only on Sign out,
+    // a revoke from Sessions, or an admin password reset).
+    token: localStorage.getItem(TOKEN_KEY) || '',
     session: null,
     view: 'dashboard',
     analyticsRange: RANGES.indexOf(localStorage.getItem(RANGE_KEY)) >= 0 ? localStorage.getItem(RANGE_KEY) : '24h',
-    filters: { users: { search: '', status: '' }, devices: { search: '', presence: '' }, audit: { search: '' } },
+    filters: { users: { search: '', status: '', admin: '' }, devices: { search: '', presence: '' }, audit: { search: '' } },
       // Latest /api/v1/admin/summary payload, used for the sidebar counts.
       // Empty until the server answers, so no figure is invented here.
       summary: {},
@@ -264,7 +266,7 @@
     host.innerHTML = `<div class="menu" role="menu" data-overlay="identity">
       <div class="menu-identity">
         <strong>${ui.esc(session.username || '—')}</strong>
-        <span>${ui.esc(fmt.titleCase(session.role))}${session.expires_at ? ' · expires ' + ui.esc(fmt.relative(session.expires_at)) : ''}</span>
+        <span>${ui.esc(fmt.titleCase(session.role))}${session.username ? ' · signed in until you sign out' : ''}</span>
       </div>
       <button class="menu-item" data-menu="refresh" role="menuitem">${ui.icon('i-refresh')}Refresh data</button>
       <button class="menu-item" data-menu="theme" role="menuitem">${ui.icon('i-sun')}Toggle light / dark</button>
@@ -682,8 +684,8 @@
   function handleExpiry() {
     state.token = '';
     state.session = null;
-    sessionStorage.removeItem(TOKEN_KEY);
-    sessionStorage.removeItem(IDENTITY_KEY);
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(IDENTITY_KEY);
     showLogin();
     const error = $('login-error');
     error.hidden = false;
@@ -694,8 +696,8 @@
     const token = state.token;
     state.token = '';
     state.session = null;
-    sessionStorage.removeItem(TOKEN_KEY);
-    sessionStorage.removeItem(IDENTITY_KEY);
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(IDENTITY_KEY);
     closeOverlays();
     showLogin();
     if (token) {
@@ -717,8 +719,8 @@
       });
       state.token = data.token;
       state.session = Object.assign({}, data.admin, { expires_at: data.expires_at });
-      sessionStorage.setItem(TOKEN_KEY, state.token);
-      sessionStorage.setItem(IDENTITY_KEY, JSON.stringify(state.session));
+      localStorage.setItem(TOKEN_KEY, state.token);
+      localStorage.setItem(IDENTITY_KEY, JSON.stringify(state.session));
       $('password').value = '';
       showApp();
     } catch (err) {
@@ -967,6 +969,103 @@
     mountView(state.view);
   });
 
+  // Bundle 214: make an app user an admin (level picker, Owner default),
+  // change the level, or remove admin. Web owner only.
+  function adminLevelDialog(name, current) {
+    return new Promise((resolve) => {
+      const levels = [
+        ['owner', 'Owner', 'All admin tools. Can block users and set the app version offline'],
+        ['operator', 'Operator', 'Same rights as web Operator (no offline block / app version)'],
+        ['security', 'Security', 'Same rights as web Security (no offline block / app version)'],
+        ['auditor', 'Auditor', 'Same rights as web Auditor'],
+      ];
+      const pick = current || 'owner';
+      const host = $('modal-host');
+      host.innerHTML = `<div class="modal-scrim" role="dialog" aria-modal="true">
+        <div class="modal" data-admin-dialog>
+          <h2>\u{1F451} ${current ? 'Admin level for' : 'Make'} ${ui.esc(name)}${current ? '' : ' an admin'}</h2>
+          <p>They get admin tools in the LinkUp app and a crown on their photo that everyone can see. No password: their phone becomes admin by itself.</p>
+          <div class="field"><label>Admin level</label>
+            ${levels.map(([value, label, help]) => `<label style="display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid var(--border);border-radius:8px;margin-top:6px">
+              <input type="radio" name="admin_level" value="${value}" ${value === pick ? 'checked' : ''}>
+              <span><strong>${label}${value === 'owner' ? ' (default)' : ''}</strong><br><span class="subtle" style="font-size:12px">${ui.esc(help)}</span></span>
+            </label>`).join('')}
+          </div>
+          <p class="subtle" style="font-size:12px">Their phone gets it when it reaches the server. Other phones see the crown even offline (the card spreads phone to phone).</p>
+          <div class="modal-actions">
+            <button class="btn" data-modal="cancel">Cancel</button>
+            <button class="btn btn-primary" data-modal="confirm">${current ? 'Save level' : 'Make admin'}</button>
+          </div>
+        </div>
+      </div>`;
+      const finish = (value) => { host.innerHTML = ''; resolve(value); };
+      host.querySelector('[data-modal="cancel"]').addEventListener('click', () => finish(null));
+      host.querySelector('[data-modal="confirm"]').addEventListener('click', () => {
+        const chosen = host.querySelector('[name="admin_level"]:checked');
+        finish(chosen ? chosen.value : 'owner');
+      });
+      host.querySelector('.modal-scrim').addEventListener('click', (event) => {
+        if (event.target.classList.contains('modal-scrim')) finish(null);
+      });
+    });
+  }
+  document.addEventListener('click', async (event) => {
+    const btn = event.target.closest('[data-user-admin]');
+    if (!btn) return;
+    const id = btn.getAttribute('data-user-admin');
+    const name = btn.getAttribute('data-user-name') || 'this user';
+    const mode = btn.getAttribute('data-admin-mode');
+    let body = null;
+    if (mode === 'remove') {
+      const ok = await confirmDialog({
+        title: `Remove admin from ${name}?`, destructive: true, confirmLabel: 'Remove admin',
+        message: `${name} goes back to a normal user as soon as the phone reaches the server: the Admin row in the app disappears, the offline admin key stops working and the crown goes from every phone. Blocks made before stay (an owner can undo them).`,
+      });
+      if (!ok) return;
+      body = { user_id: id, remove: true };
+    } else {
+      const role = await adminLevelDialog(name, mode === 'level' ? btn.getAttribute('data-user-role') : '');
+      if (!role) return;
+      body = { user_id: id, role };
+    }
+    try {
+      await post('/api/v1/admin/user-admin', body);
+      toast(body.remove ? `${name} is no longer an admin` : `${name} is now an admin`);
+      mountView('users');
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
+  // Bundle 213: App version page (save / remove the minimum version).
+  async function saveVersionRule(body, note) {
+    try {
+      await post('/api/v1/admin/version-rule', body);
+      toast('Rule saved for everyone');
+      mountView('appversion');
+    } catch (err) {
+      toast(err.message, 'error');
+      if (note) note.textContent = err.message;
+    }
+  }
+  document.addEventListener('submit', (event) => {
+    const form = event.target.closest('[data-version-form]');
+    if (!form) return;
+    event.preventDefault();
+    const when = (form.querySelector('[name="when"]:checked') || {}).value || 'warn';
+    saveVersionRule({
+      min_version: form.querySelector('[name="min_version"]').value.trim(),
+      min_build: Number(form.querySelector('[name="min_build"]').value),
+      mode: when === 'warn' ? 'warn' : 'stop',
+      stop_days: when === 'days' ? Number(form.querySelector('[name="stop_days"]').value) : 0,
+      very_old: form.querySelector('[name="very_old"]').checked,
+    }, form.querySelector('[data-version-note]'));
+  });
+  document.addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-version-remove]');
+    if (!btn) return;
+    if (!window.confirm('Remove the minimum version for everyone?')) return;
+    saveVersionRule({ remove: true }, null);
+  });
+
   document.addEventListener('submit', async (event) => {
     const form = event.target.closest('[data-settings-form]');
     if (!form) return;
@@ -1100,7 +1199,7 @@
     const token = state.token;
     if (!token) { showLogin(); return; }
     let identity = null;
-    try { identity = JSON.parse(sessionStorage.getItem(IDENTITY_KEY) || 'null'); } catch (err) { identity = null; }
+    try { identity = JSON.parse(localStorage.getItem(IDENTITY_KEY) || 'null'); } catch (err) { identity = null; }
     state.session = identity || { username: 'Authenticated administrator', role: 'auditor' };
     try {
       state.summary = await api('/api/v1/admin/summary');

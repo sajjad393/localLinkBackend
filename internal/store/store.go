@@ -1187,6 +1187,113 @@ func orderedMigrationSpecs() []orderedMigrationSpec {
 			_, err := tx.Exec(`DROP TABLE IF EXISTS group_key_envelopes`)
 			return err
 		},
+	}, {
+		// Bundle 212: offline admin blocks. The server signing key lives in
+		// admin_settings; these tables hold the admin offline keys (certs),
+		// their "ended" notes and the newest signed block / unblock per user.
+		Version:     55,
+		Name:        "admin-offline-blocks",
+		Checksum:    "locallink-admin-offline-blocks-v1",
+		Predecessor: 54,
+		Apply: func(tx *sql.Tx) error {
+			_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS admin_offline_certs (
+				cert_id TEXT PRIMARY KEY,
+				admin_id TEXT NOT NULL,
+				session_id TEXT NOT NULL,
+				device_id TEXT NOT NULL,
+				signing_key TEXT NOT NULL,
+				body TEXT NOT NULL,
+				sig TEXT NOT NULL,
+				issued_at TEXT NOT NULL,
+				ended_at TEXT
+			);
+			CREATE INDEX IF NOT EXISTS idx_admin_offline_certs_session ON admin_offline_certs(session_id);
+			CREATE INDEX IF NOT EXISTS idx_admin_offline_certs_admin ON admin_offline_certs(admin_id);
+			CREATE TABLE IF NOT EXISTS admin_cert_ended (
+				cert_id TEXT PRIMARY KEY,
+				body TEXT NOT NULL,
+				sig TEXT NOT NULL,
+				at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS admin_blocks (
+				target_user_id TEXT PRIMARY KEY,
+				record_id TEXT NOT NULL,
+				action TEXT NOT NULL,
+				seq INTEGER NOT NULL,
+				at TEXT NOT NULL,
+				body TEXT NOT NULL,
+				sig TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);`)
+			return err
+		},
+	}, {
+		// Bundle 213: admin stops old app versions. One signed rule (newest
+		// wins) and the last build each phone sent (web page "App version").
+		Version:     56,
+		Name:        "app-version-rule",
+		Checksum:    "locallink-app-version-rule-v1",
+		Predecessor: 55,
+		Apply: func(tx *sql.Tx) error {
+			_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS version_rules (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				record_id TEXT NOT NULL,
+				seq INTEGER NOT NULL,
+				at TEXT NOT NULL,
+				body TEXT NOT NULL,
+				sig TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS device_builds (
+				device_id TEXT PRIMARY KEY,
+				build INTEGER NOT NULL,
+				seen_at TEXT NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_device_builds_seen ON device_builds(seen_at);`)
+			return err
+		},
+	}, {
+		// Bundle 214: an app user can be made an admin on the web. The admin
+		// account is linked to the user (no password of its own); its admin
+		// sessions belong to one phone; admin_badges holds the newest
+		// server-signed "admin card" (crown) per user.
+		Version:     57,
+		Name:        "app-user-admins",
+		Checksum:    "locallink-app-user-admins-v1",
+		Predecessor: 56,
+		Apply: func(tx *sql.Tx) error {
+			addColumn := func(table, column, definition string) error {
+				var exists int
+				if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, column).Scan(&exists); err != nil {
+					return err
+				}
+				if exists > 0 {
+					return nil
+				}
+				_, err := tx.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + definition)
+				return err
+			}
+			if err := addColumn("admin_accounts", "user_id", "TEXT"); err != nil {
+				return err
+			}
+			if err := addColumn("admin_sessions", "device_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+			_, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_accounts_user ON admin_accounts(user_id) WHERE user_id IS NOT NULL;
+			CREATE INDEX IF NOT EXISTS idx_admin_sessions_device ON admin_sessions(admin_id, device_id);
+			CREATE TABLE IF NOT EXISTS admin_badges (
+				user_id TEXT PRIMARY KEY,
+				record_id TEXT NOT NULL,
+				role TEXT NOT NULL,
+				on_flag INTEGER NOT NULL,
+				seq INTEGER NOT NULL,
+				at TEXT NOT NULL,
+				body TEXT NOT NULL,
+				sig TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);`)
+			return err
+		},
 	}}
 }
 

@@ -13,7 +13,12 @@ import (
 	"github.com/google/uuid"
 )
 
-const adminSessionTTL = 30 * time.Minute
+// Bundle 211: an admin sign-in no longer ends by itself after 30 minutes.
+// It ends only on logout, on a revoke from the Sessions list, or when the
+// admin password is reset (ResetAdminCredentials revokes every session).
+// The expires_at column and every check stay the same (no migration); the
+// limit is simply far away.
+const adminSessionTTL = 10 * 365 * 24 * time.Hour
 
 type AdminAccount struct {
 	ID        string `json:"id"`
@@ -21,6 +26,10 @@ type AdminAccount struct {
 	Role      string `json:"role"`
 	Status    string `json:"status"`
 	CreatedAt string `json:"created_at"`
+	// Bundle 214: set for an app user made admin on the web (no password of
+	// its own). DeviceID is the phone behind the current admin session.
+	UserID   string `json:"user_id,omitempty"`
+	DeviceID string `json:"-"`
 }
 
 type AdminLoginResponse struct {
@@ -152,6 +161,8 @@ func (a *API) ResetAdminCredentials() error {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	// Bundle 212: a password reset also ends this admin's offline keys.
+	a.endCertsForAdmin(adminID)
 
 	return nil
 }
@@ -179,7 +190,13 @@ func (a *API) AdminLogin(w http.ResponseWriter, r *http.Request) {
 	var admin AdminAccount
 	var saltB64, hashB64 string
 	var iterations int
-	if err := a.store.DB().QueryRow(`SELECT id,username,role,status,created_at,password_salt,password_hash,password_iterations FROM admin_accounts WHERE username=?`, username).Scan(&admin.ID, &admin.Username, &admin.Role, &admin.Status, &admin.CreatedAt, &saltB64, &hashB64, &iterations); err != nil {
+	if err := a.store.DB().QueryRow(`SELECT id,username,role,status,created_at,password_salt,password_hash,password_iterations,COALESCE(user_id,'') FROM admin_accounts WHERE username=?`, username).Scan(&admin.ID, &admin.Username, &admin.Role, &admin.Status, &admin.CreatedAt, &saltB64, &hashB64, &iterations, &admin.UserID); err != nil {
+		_ = derivePasswordKey(in.Password, []byte("locallink-admin-dummy-salt-v1"), passwordIterations)
+		writeError(w, http.StatusUnauthorized, "invalid admin credentials")
+		return
+	}
+	// Bundle 214: an app user made admin uses the LinkUp app, never this login.
+	if admin.UserID != "" {
 		_ = derivePasswordKey(in.Password, []byte("locallink-admin-dummy-salt-v1"), passwordIterations)
 		writeError(w, http.StatusUnauthorized, "invalid admin credentials")
 		return
@@ -224,6 +241,8 @@ func (a *API) AdminLogout(w http.ResponseWriter, r *http.Request) {
 	if authenticated && resAffected(res) > 0 {
 		a.adminAudit(admin.ID, "admin_logout", "", "authenticated session revoked")
 	}
+	// Bundle 212: signing out ends the offline key made for this sign-in.
+	a.endCertsForTokenHash(tokenHashValue)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "revoked": resAffected(res)})
 }
 
@@ -247,8 +266,15 @@ func (a *API) authorizeAdminSession(r *http.Request) (AdminAccount, bool) {
 	}
 	var out AdminAccount
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	err := a.store.DB().QueryRow(`SELECT aa.id,aa.username,aa.role,aa.status,aa.created_at FROM admin_sessions s JOIN admin_accounts aa ON aa.id=s.admin_id WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND aa.status='active'`, tokenHash(token), now).Scan(&out.ID, &out.Username, &out.Role, &out.Status, &out.CreatedAt)
+	// Bundle 214: a linked (app user) admin shows the app username.
+	err := a.store.DB().QueryRow(`SELECT aa.id,COALESCE(u.username,aa.username),aa.role,aa.status,aa.created_at,COALESCE(aa.user_id,''),COALESCE(s.device_id,'') FROM admin_sessions s JOIN admin_accounts aa ON aa.id=s.admin_id LEFT JOIN users u ON u.id=aa.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND aa.status='active'`, tokenHash(token), now).Scan(&out.ID, &out.Username, &out.Role, &out.Status, &out.CreatedAt, &out.UserID, &out.DeviceID)
 	if err != nil {
+		return AdminAccount{}, false
+	}
+	// Bundle 214: a phone admin session works only while that phone is still
+	// signed in to the same active account (logout, revoke, suspend and
+	// disable all stop it here).
+	if out.UserID != "" && !a.deviceAdminAllowed(out.UserID, out.DeviceID) {
 		return AdminAccount{}, false
 	}
 	_, _ = a.store.DB().Exec(`UPDATE admin_sessions SET last_seen_at=? WHERE token_hash=? AND revoked_at IS NULL`, now, tokenHash(token))

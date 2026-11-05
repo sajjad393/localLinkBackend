@@ -412,6 +412,7 @@ func (a *API) AdminRevokeDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = a.store.DB().Exec(`UPDATE auth_sessions SET revoked_at=? WHERE device_id=? AND revoked_at IS NULL`, now, id)
 	_, _ = a.store.DB().Exec(`UPDATE device_identity_keys SET retired_at=? WHERE device_id=? AND retired_at IS NULL`, now, id)
+	a.endDeviceAdminSessions(id) // Bundle 214
 	a.hub.CloseDevice(id)
 	a.presenceMu.Lock()
 	delete(a.presence, id)

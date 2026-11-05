@@ -447,7 +447,7 @@ LL.views = {};
       // Sidebar count from the server summary.
       navCount: 'users',
     async mount(el, ctx) {
-      const query = ctx.state.filters.users || { search: '', status: '' };
+      const query = ctx.state.filters.users || { search: '', status: '', admin: '' };
       el.innerHTML = ui.skeletonPanel(6);
       const result = await settle(ctx.api('/api/v1/admin/users?limit=200'));
       if (!result.ok) { el.innerHTML = ui.panel({ title: 'Users', body: ui.errorState(result.error, 'users') }); return; }
@@ -457,8 +457,28 @@ LL.views = {};
       const filtered = all.filter((u) => {
         if (search && String(u.username || '').toLowerCase().indexOf(search) < 0) return false;
         if (query.status && u.status !== query.status) return false;
+        // Bundle 214: Admins filter.
+        if (query.admin === 'yes' && !u.admin_role) return false;
+        if (query.admin === 'no' && u.admin_role) return false;
         return true;
       });
+      const adminCount = all.filter((u) => u.admin_role).length;
+      const roleLabel = (r) => ({ owner: 'Owner', operator: 'Operator', security: 'Security', auditor: 'Auditor' }[r] || r);
+      // Bundle 214: make / remove admin (web owner only; app admins never see this page's buttons work).
+      const webOwner = ctx.can('manageUsers');
+      const adminCell = (u) => u.admin_role
+        ? `<div>${ui.badge('\u{1F451} ' + roleLabel(u.admin_role), 'warning')}<div class="subtle" style="font-size:11px">phone admin</div></div>`
+        : '<span class="subtle">\u2014</span>';
+      const adminButtons = (u) => {
+        if (!webOwner) return '';
+        const data = `data-user-admin="${ui.esc(u.id)}" data-user-name="${ui.esc(u.username || '')}" data-user-role="${ui.esc(u.admin_role || '')}"`;
+        if (u.admin_role) {
+          return `<button class="btn btn-sm btn-danger" ${data} data-admin-mode="remove">Remove admin</button>
+                  <button class="btn btn-sm" ${data} data-admin-mode="level">Level</button>`;
+        }
+        if (u.status === 'disabled') return '';
+        return `<button class="btn btn-sm btn-primary" ${data} data-admin-mode="make">Make admin\u2026</button>`;
+      };
 
       const rows = filtered.map((u) => [
         `<div><span class="cell-primary">${emptyText(u.username)}</span>
@@ -466,6 +486,7 @@ LL.views = {};
         ui.statusBadge(u.status),
         `<span>${fmt.number(u.devices)}</span>`,
         `<span>${fmt.number(u.online_devices)}</span>`,
+        adminCell(u),
         `<span class="subtle">${ui.esc(fmt.dateTime(u.created_at))}</span>`,
         tableActions([
           ctx.can('manageUsers')
@@ -475,12 +496,13 @@ LL.views = {};
                </select>`
             : `<span class="subtle">Owner only</span>`,
           `<button class="btn btn-sm" data-user-devices="${ui.esc(u.id)}">Devices</button>`,
+          adminButtons(u),
         ]),
       ]);
 
       el.innerHTML = `
         <div class="section">
-          ${ui.sectionHead({ title: 'Users', subtitle: 'Account state, device counts and administrative actions', icon: 'i-users', actions: ui.badge(`${all.length} accounts`, 'neutral') })}
+          ${ui.sectionHead({ title: 'Users', subtitle: 'Account state, device counts, admin role and administrative actions', icon: 'i-users', actions: `${ui.badge(`${adminCount} app admins`, 'warning')} ${ui.badge(`${all.length} accounts`, 'neutral')}` })}
           ${ui.panel({
             pad0: true,
             body: `<div style="padding:16px 16px 0">${ui.filterBar({
@@ -495,12 +517,19 @@ LL.views = {};
                   { value: 'suspended', label: 'Suspended' },
                   { value: 'disabled', label: 'Disabled' },
                 ],
+              }, {
+                key: 'admin', label: 'Admins', value: query.admin || '',
+                options: [
+                  { value: '', label: 'Admins: All' },
+                  { value: 'yes', label: 'Admins only' },
+                  { value: 'no', label: 'Not admins' },
+                ],
               }],
             })}</div>
             <div style="padding:16px">${ui.table({
               columns: [
                 { label: 'Username' }, { label: 'Status' }, { label: 'Devices', numeric: true },
-                { label: 'Online', numeric: true }, { label: 'Created' }, { label: 'Actions' },
+                { label: 'Online', numeric: true }, { label: 'Admin' }, { label: 'Created' }, { label: 'Actions' },
               ],
               rows,
               emptyTitle: 'No accounts match',
@@ -1587,9 +1616,60 @@ LL.views = {};
     },
   };
 
-  LL.views = { dashboard, users, devices, sessions, network, calls, transfers, security, audit, recovery, diagnostics, settings, privacy, conversations };
+  // -------------------------------------------------------------- app version
+  // Bundle 213: minimum app version (warn / stop old builds).
+  const appversion = {
+    id: 'appversion',
+    title: 'App version',
+    subtitle: 'Minimum app version for phones',
+    icon: 'i-devices',
+    group: 'Platform',
+    roles: ['owner'],
+    async mount(el, ctx) {
+      el.innerHTML = ui.skeletonPanel(4);
+      const result = await settle(ctx.api('/api/v1/admin/version-rule'));
+      if (!result.ok) { el.innerHTML = ui.panel({ title: 'App version', body: ui.errorState(result.error, 'appversion') }); return; }
+      const data = result.data || {};
+      const rule = data.rule;
+      const builds = Array.isArray(data.builds) ? data.builds : [];
+      const ruleText = rule
+        ? `Below build ${ui.esc(rule.min_build)} (${ui.esc(rule.min_version)}): ${rule.mode === 'warn' ? 'warn only' : 'stop from ' + ui.esc(rule.stop_at)}${rule.very_old ? ' · very old apps stopped' : ''} · by ${ui.esc(rule.by)}`
+        : 'None set';
+      const rows = builds.length
+        ? builds.map((b) => `<tr><td>${ui.esc(b.build)}</td><td>${ui.esc(b.devices)}</td><td>${ui.esc(b.last_seen)}</td></tr>`).join('')
+        : `<tr><td colspan="3">${ui.esc('No phone has sent its build yet (apps from 3.0.54 do).')}</td></tr>`;
+      el.innerHTML = `
+        <div class="section">
+          ${ui.sectionHead({ title: 'App version', subtitle: 'Old phones get a warning, then can only read chats until they update', icon: 'i-devices' })}
+          ${ui.panel({ title: 'Current rule', subtitle: 'Signed by the server; phones pass it on with no internet', body: `<p data-version-current>${ruleText}</p>` })}
+          ${ui.panel({
+            title: 'Minimum version', subtitle: 'Phones below it are warned or stopped',
+            body: `<form class="stack gap-lg" data-version-form style="max-width:520px">
+              <div class="field"><label for="ver-name">Version name (e.g. 3.0.54)</label>
+                <input class="input" id="ver-name" name="min_version" value="${ui.esc(rule ? rule.min_version : '')}"></div>
+              <div class="field"><label for="ver-build">Build number (e.g. 125)</label>
+                <input class="input" id="ver-build" name="min_build" type="number" min="1" value="${ui.esc(rule ? rule.min_build : '')}"></div>
+              <div class="field"><label>What happens</label>
+                <label><input type="radio" name="when" value="warn"> Warn only</label>
+                <label><input type="radio" name="when" value="now"> Stop now</label>
+                <label><input type="radio" name="when" value="days" checked> Stop after
+                  <input class="input" name="stop_days" type="number" min="1" max="30" value="3" style="width:80px;display:inline-block"> days</label></div>
+              <label><input type="checkbox" name="very_old"> Also stop very old apps (before 3.0.54)</label>
+              <div class="row gap-md">
+                <button class="btn btn-primary" type="submit">Save rule</button>
+                <button class="btn" type="button" data-version-remove>Remove rule</button>
+                <span class="type-caption" data-version-note></span>
+              </div>
+            </form>`,
+          })}
+          ${ui.panel({ title: 'Phones by build', subtitle: 'Last 30 days', body: `<table class="table"><thead><tr><th>Build</th><th>Phones</th><th>Last seen</th></tr></thead><tbody>${rows}</tbody></table>` })}
+        </div>`;
+    },
+  };
+
+  LL.views = { dashboard, users, devices, sessions, network, calls, transfers, security, audit, recovery, diagnostics, settings, privacy, conversations, appversion };
 
   // Modules that are restricted to specific roles (used by quick actions too).
-  LL.moduleRoles = { settings: ['owner'], conversations: ['owner'] };
+  LL.moduleRoles = { settings: ['owner'], conversations: ['owner'], appversion: ['owner'] };
 
 })();
