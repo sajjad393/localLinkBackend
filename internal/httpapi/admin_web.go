@@ -32,6 +32,10 @@ var adminWebAssets = map[string]struct {
 // without a file extension fall back to the console shell so refresh and deep
 // links keep working; unknown assets return 404 rather than HTML.
 func (a *API) AdminWeb(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/admin/fonts/") {
+		a.AdminFont(w, r) // Bundle 216: Roboto for the web panel.
+		return
+	}
 	name := assetNameFor(r.URL.Path)
 	asset, ok := adminWebAssets[name]
 	if !ok {

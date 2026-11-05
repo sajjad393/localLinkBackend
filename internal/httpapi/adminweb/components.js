@@ -369,10 +369,93 @@ window.LL = window.LL || {};
     return `<div class="filter-bar">${controls.join('')}</div>`;
   }
 
+  // ------------------------------------------------------------ Bundle 216
+  // Crown A (same shape as the app's CrownPainter216), person cells with the
+  // real photo (loaded by app.js through the admin avatar route), tone pills
+  // and chips. Every server value still goes through esc().
+  const TONES_216 = {
+    green: ['#12351F', '#4ADE80'], red: ['#3B1518', '#F87171'], orange: ['#3A2A10', '#FBBF24'],
+    blue: ['#16274A', '#7AA7FF'], grey: ['#262C36', '#C0C7D1'], gold: ['#3A2F0E', '#F5C542'],
+    purple: ['#2A2245', '#B49CFF'], teal: ['#0F3330', '#5EEAD4'],
+  };
+
+  function crown216(width) {
+    const w = Math.max(10, Math.min(28, Number(width) || 14));
+    const h = w * 0.74;
+    // Units: w = 100, h = 74, band = 18.5.
+    return `<svg class="crown216" width="${w.toFixed(1)}" height="${h.toFixed(1)}" viewBox="-11 -3 122 80" aria-label="Admin" role="img">
+      <g stroke="#A87400" stroke-width="3.5" stroke-linejoin="round">
+        <polygon points="5,55.5 0,22.2 30,41.4 50,7.4 70,41.4 100,22.2 95,55.5" fill="#FFC727"/>
+        <polygon points="5,55.5 95,55.5 93,74 7,74" fill="#EFA300"/>
+        <circle cx="0" cy="22.2" r="9.5" fill="#FFC727"/><circle cx="50" cy="7.4" r="9.5" fill="#FFC727"/><circle cx="100" cy="22.2" r="9.5" fill="#FFC727"/>
+      </g>
+      <circle cx="50" cy="64.7" r="6" fill="#E5484D"/>
+    </svg>`;
+  }
+
+  function initials216(name) {
+    const parts = String(name || '?').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return '?';
+    return (parts[0].charAt(0) + (parts.length > 1 ? parts[parts.length - 1].charAt(0) : '')).toUpperCase();
+  }
+
+  // avatar216({ userId, name, hasAvatar, admin, blocked, online, size })
+  function avatar216(o) {
+    const size = Number(o.size) || 32;
+    const cls = ['av216', o.admin ? 'is-admin' : '', o.blocked ? 'is-blocked' : ''].filter(Boolean).join(' ');
+    const photo = o.hasAvatar && o.userId
+      ? ` data-avatar-user="${esc(o.userId)}"` : '';
+    return `<span class="${cls}" style="--av:${size}px"${photo} title="${esc(o.name || '')}">
+      <span class="av216-in">${esc(initials216(o.name))}</span>
+      ${o.admin && !o.blocked ? `<span class="av216-crown">${crown216(size * 0.4)}</span>` : ''}
+      ${o.online ? '<span class="av216-dot"></span>' : ''}
+    </span>`;
+  }
+
+  // person216({ userId, name, sub, hasAvatar, admin, blocked, online, size })
+  function person216(o) {
+    return `<div class="p216">${avatar216(o)}<span class="p216-t"><b>${esc(o.name || '—')}</b>${o.sub ? `<small>${esc(o.sub)}</small>` : ''}</span></div>`;
+  }
+
+  function pill216(label, tone) {
+    const t = TONES_216[tone] || TONES_216.grey;
+    return `<span class="pill216" style="background:${t[0]};color:${t[1]}">${esc(label)}</span>`;
+  }
+
+  // chips216(list, active, attr) -> one row of chips; list = [{ value, label }]
+  function chips216(list, active, attr) {
+    return `<div class="chips216">${list.map((c) => `<button type="button" class="chip216 ${c.value === active ? 'on' : ''}" ${attr}="${esc(c.value)}">${esc(c.label)}</button>`).join('')}</div>`;
+  }
+
+  // Short, plain "when": Online now / 5 min ago / Yesterday / 2 Nov.
+  function when216(value) {
+    if (!value) return '—';
+    const t = new Date(value);
+    if (isNaN(t.getTime())) return '—';
+    const diff = (Date.now() - t.getTime()) / 1000;
+    if (diff < 120) return 'Online now';
+    if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    if (t >= today) return `${Math.floor(diff / 3600)} h ago`;
+    const yesterday = new Date(today.getTime() - 86400000);
+    if (t >= yesterday) return 'Yesterday';
+    if (diff < 7 * 86400) return `${Math.floor(diff / 86400)} days ago`;
+    return t.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  }
+
+  const LEVELS_216 = { owner: 'Owner', operator: 'Operator', security: 'Security', auditor: 'Auditor' };
+  const LINKS_216 = {
+    server: { label: 'Server', tone: 'green', color: '#3FB26F' },
+    wifi_direct: { label: 'Wi-Fi Direct', tone: 'orange', color: '#F5A524' },
+    mesh: { label: 'Mesh', tone: 'purple', color: '#8B5CF6' },
+    lan: { label: 'Local Wi-Fi', tone: 'teal', color: '#2DD4BF' },
+  };
+
   LL.ui = {
     esc, icon, badge, statusBadge, severityBadge, statusInfo, severityTone, severityIcon, token,
     panel, sectionHead, metricCard, statRow, headline, table, timeline, notificationItem,
     emptyState, errorState, skeletonPanel, skeletonCards, segmented, healthRow, quickAction, note, filterBar,
+    crown216, avatar216, person216, pill216, chips216, when216, initials216, TONES_216, LEVELS_216, LINKS_216,
   };
 
   LL.fmt = { number, bytes, relative, dateTime, bucket, duration, titleCase };

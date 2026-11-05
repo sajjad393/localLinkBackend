@@ -21,6 +21,11 @@ type CallRecord struct {
 	DurationSeconds int64  `json:"duration_seconds"`
 	EndReason       string `json:"end_reason,omitempty"`
 	LastActivityAt  string `json:"last_activity_at,omitempty"`
+	// Bundle 216: filled only on the admin list.
+	CallerUserID string `json:"caller_user_id,omitempty"`
+	CallerName   string `json:"caller_name,omitempty"`
+	CalleeUserID string `json:"callee_user_id,omitempty"`
+	CalleeName   string `json:"callee_name,omitempty"`
 }
 
 func (a *API) ListCalls(w http.ResponseWriter, r *http.Request) {

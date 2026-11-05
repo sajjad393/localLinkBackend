@@ -101,6 +101,8 @@ func main() {
 	mux.Handle("POST /api/v1/calls/reconcile", api.WithIdempotency("call-reconcile", http.HandlerFunc(api.ReconcileCall)))
 	mux.HandleFunc("GET /api/v1/admin/summary", api.AdminSummary)
 	mux.HandleFunc("GET /api/v1/admin/users", api.AdminUsers)
+	mux.HandleFunc("GET /api/v1/admin/users/{id}/avatar", api.AdminUserAvatar)
+	mux.HandleFunc("GET /api/v1/admin/link-map", api.AdminLinkMap)
 	mux.HandleFunc("POST /api/v1/admin/user/status", api.AdminSetUserStatus)
 	mux.HandleFunc("GET /api/v1/admin/user/network-policy", api.AdminGetUserNetworkPolicy)
 	mux.HandleFunc("POST /api/v1/admin/user/network-policy", api.AdminUpdateUserNetworkPolicy)

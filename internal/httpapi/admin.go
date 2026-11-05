@@ -31,6 +31,10 @@ type AdminDevice struct {
 	Username        string `json:"username,omitempty"`
 	Online          bool   `json:"online"`
 	TokenConfigured bool   `json:"token_configured"`
+	// Bundle 216: owner name, photo and app build.
+	DisplayName string `json:"display_name,omitempty"`
+	HasAvatar   bool   `json:"has_avatar"`
+	AppBuild    int64  `json:"app_build,omitempty"`
 }
 
 type AdminGroup struct {
@@ -48,6 +52,9 @@ type AdminLog struct {
 	TargetID  string `json:"target_id,omitempty"`
 	Detail    string `json:"detail,omitempty"`
 	CreatedAt string `json:"created_at"`
+	// Bundle 216: who did it, and the target in words.
+	AdminName  string `json:"admin_name,omitempty"`
+	TargetName string `json:"target_name,omitempty"`
 }
 
 type AdminSecurityEvent struct {
@@ -58,6 +65,10 @@ type AdminSecurityEvent struct {
 	SourceHash string `json:"source_hash,omitempty"`
 	Detail     string `json:"detail,omitempty"`
 	CreatedAt  string `json:"created_at"`
+	// Bundle 216.
+	Username    string `json:"username,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	DeviceName  string `json:"device_name,omitempty"`
 }
 
 func (a *API) adminConfigured() bool {
@@ -143,6 +154,8 @@ func (a *API) AdminDevices(w http.ResponseWriter, r *http.Request) {
 	if hasMore {
 		out = out[:params.Limit]
 	}
+	rows.Close()
+	a.enrichDevices216(out)
 	resp := struct {
 		Devices []AdminDevice `json:"devices"`
 		PageInfo
@@ -245,6 +258,8 @@ func (a *API) AdminCalls(w http.ResponseWriter, r *http.Request) {
 	if hasMore {
 		out = out[:params.Limit]
 	}
+	rows.Close()
+	a.enrichCalls216(out)
 	resp := struct {
 		Calls []CallRecord `json:"calls"`
 		PageInfo
@@ -296,6 +311,8 @@ func (a *API) AdminSecurityEvents(w http.ResponseWriter, r *http.Request) {
 	if hasMore {
 		out = out[:params.Limit]
 	}
+	rows.Close()
+	a.enrichSecurity216(out)
 	resp := struct {
 		Events []AdminSecurityEvent `json:"security_events"`
 		PageInfo
@@ -347,6 +364,8 @@ func (a *API) AdminLogs(w http.ResponseWriter, r *http.Request) {
 	if hasMore {
 		out = out[:params.Limit]
 	}
+	rows.Close()
+	a.enrichLogs216(out)
 	resp := struct {
 		Logs []AdminLog `json:"logs"`
 		PageInfo

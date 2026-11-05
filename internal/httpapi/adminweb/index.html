@@ -69,13 +69,12 @@
       </span>
       <strong style="font-size:17px">LocalLink</strong>
     </div>
-    <h1>Administration console</h1>
-    <p class="lede">Monitor the server, the network mesh and the accounts that use them.</p>
+    <h1>Admin panel</h1>
+    <p class="lede">Look after the LocalLink server, the phones and the people who use them.</p>
     <ul>
-      <li><svg class="icon" viewBox="0 0 24 24"><use href="#i-check"></use></svg><span><strong>Live health monitoring</strong><span>CPU, memory, storage, database and every transport</span></span></li>
-      <li><svg class="icon" viewBox="0 0 24 24"><use href="#i-check"></use></svg><span><strong>Operational analytics</strong><span>Rollups over 24 hours to 90 days, straight from server tables</span></span></li>
-      <li><svg class="icon" viewBox="0 0 24 24"><use href="#i-check"></use></svg><span><strong>Security oversight</strong><span>Failed logins, locked accounts and recovery requests</span></span></li>
-      <li><svg class="icon" viewBox="0 0 24 24"><use href="#i-check"></use></svg><span><strong>Complete audit trail</strong><span>Every administrative action recorded and reviewable</span></span></li>
+      <li><svg class="icon" viewBox="0 0 24 24"><use href="#i-check"></use></svg><span><strong>See every phone live</strong><span>Who is online and how phones are linked, on a map</span></span></li>
+      <li><svg class="icon" viewBox="0 0 24 24"><use href="#i-check"></use></svg><span><strong>Keep people safe</strong><span>Block users, approve recovery, set the app version</span></span></li>
+      <li><svg class="icon" viewBox="0 0 24 24"><use href="#i-check"></use></svg><span><strong>Everything is saved</strong><span>Every admin action goes into the audit log</span></span></li>
     </ul>
     <p class="auth-note">
       <svg class="icon" viewBox="0 0 24 24" style="margin-top:2px"><use href="#i-lock"></use></svg>
@@ -89,12 +88,9 @@
         <span class="mark">
           <svg class="icon" viewBox="0 0 24 24" width="19" height="19"><use href="#i-shield"></use></svg>
         </span>
-        <h2 class="type-page-title">Administrator sign-in</h2>
+        <h2 class="type-page-title">Admin sign in</h2>
       </div>
-      <p class="type-caption">
-        Admin sessions expire automatically and tokens stay on the server. Credentials are never written to
-        browser storage beyond the opaqueness of the session token.
-      </p>
+      <p class="type-caption">You stay signed in on this browser until you press Sign out.</p>
       <div class="field">
         <label for="username">Username</label>
         <input class="input" id="username" name="username" autocomplete="username" required autofocus>
@@ -112,8 +108,8 @@
         <svg class="icon" viewBox="0 0 24 24"><use href="#i-alert"></use></svg>
         <span id="login-error-text"></span>
       </div>
-      <button class="btn btn-primary btn-block" type="submit" id="login-submit" style="height:42px">Sign in</button>
-      <p class="type-caption">Roles determine which modules appear after sign-in.</p>
+      <button class="btn btn-primary btn-block" type="submit" id="login-submit" style="height:44px">Sign in</button>
+      <p class="type-caption">Your admin level decides which pages you can open.</p>
     </form>
   </section>
 </main>
@@ -125,7 +121,7 @@
       <span class="brand-mark">
         <svg class="icon" viewBox="0 0 24 24" width="18" height="18"><use href="#i-hub"></use></svg>
       </span>
-      <span class="brand-text"><strong>LocalLink</strong><span>Admin console</span></span>
+      <span class="brand-text"><strong>LocalLink</strong><span>Admin</span></span>
     </div>
     <nav class="sidebar-nav" id="nav"></nav>
     <div class="sidebar-foot">
@@ -169,6 +165,7 @@
           <span class="who"><strong id="identity-name">—</strong><span id="identity-role">—</span></span>
           <svg class="icon" viewBox="0 0 24 24" style="width:14px;height:14px"><use href="#i-chevron-down"></use></svg>
         </button>
+        <button class="signout216" id="signout-button" type="button" data-menu="logout">Sign out</button>
       </div>
     </header>
 

@@ -322,11 +322,8 @@
   function preferredTheme() {
     const stored = localStorage.getItem(THEME_KEY);
     if (stored === 'light' || stored === 'dark') return stored;
-    try {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    } catch (err) {
-      return 'light';
-    }
+    // Bundle 216: the panel is dark by default (same as mock v4).
+    return 'dark';
   }
 
   // ---------------------------------------------------------------- topology
@@ -543,7 +540,8 @@
             data-nav="${ui.esc(view.id)}" title="${ui.esc(view.title)}">
           ${ui.icon(view.icon)}
           <span class="nav-label">${ui.esc(view.title)}</span>
-          ${restricted(view) ? `<span class="nav-meta">${ui.esc((view.roles || []).join('/'))}</span>` : ''}
+          ${view.isNew ? '<span class="nav-new216">New</span>' : ''}
+          ${view.roles ? `<span class="nav-meta" title="${restricted(view) ? 'Needs a higher level' : ''}">${ui.esc((view.roles || []).map((r) => fmt.titleCase(r)).join('/'))}</span>` : ''}
           ${navCount(view) !== null ? `<span class="nav-count">${navCount(view) > 999 ? '999+' : String(navCount(view))}</span>` : ''}
 
           ${view.id === 'security' && state.unread > 0 ? `<span class="nav-badge">${state.unread > 99 ? '99+' : state.unread}</span>` : ''}
@@ -675,6 +673,11 @@
     $('identity-name').textContent = session.username || '—';
     $('identity-role').textContent = fmt.titleCase(session.role || '') || '—';
     $('identity-initial').textContent = session.username ? session.username.charAt(0).toUpperCase() : '?';
+    // Bundle 216: every signed-in admin wears crown A next to the name.
+    $('identity-initial').classList.add('has-crown');
+    if (!document.getElementById('identity-crown')) {
+      $('identity-initial').insertAdjacentHTML('beforeend', `<span id="identity-crown" class="av216-crown">${ui.crown216(13)}</span>`);
+    }
     const stored = localStorage.getItem('locallink_admin_view');
     const start = stored && LL.views[stored] ? stored : 'dashboard';
     mountView(start);
@@ -858,17 +861,20 @@
       const id = target.getAttribute('data-device-policy');
       try {
         const current = await api(`/api/v1/admin/device/network-policy?id=${encodeURIComponent(id)}`);
-        const options = ['default', 'allow', 'block'];
+        // Bundle 216: Default / Allowed / Always on / Always off (server: null / allowed / forced_on / forced_off).
+        const words = { default: null, allowed: 'allowed', 'always on': 'forced_on', 'always off': 'forced_off' };
+        const shown = { allowed: 'Allowed', forced_on: 'Always on', forced_off: 'Always off' };
+        const now = current.device_wifi_radio_policy || current.wifi_radio_policy || '';
         const value = window.prompt(
-          `Wi-Fi radio policy for this device\nCurrent: ${current.wifi_radio_policy || 'default'}\nEnter: ${options.join(' / ')}`,
-          current.wifi_radio_policy || 'default');
+          `Wi-Fi rule for this phone\nNow: ${shown[now] || 'Default'}\nType: Default / Allowed / Always on / Always off`,
+          shown[now] || 'Default');
         if (value === null) return;
         const chosen = value.trim().toLowerCase();
-        if (options.indexOf(chosen) < 0) { toast('Policy must be default, allow or block', 'error'); return; }
+        if (!Object.prototype.hasOwnProperty.call(words, chosen)) { toast('Type Default, Allowed, Always on or Always off', 'error'); return; }
         await post(`/api/v1/admin/device/network-policy?id=${encodeURIComponent(id)}`, {
-          wifi_radio_policy: chosen === 'default' ? null : chosen,
+          wifi_radio_policy: words[chosen],
         });
-        toast('Transport policy updated');
+        toast('Wi-Fi rule saved');
         mountView('devices');
       } catch (err) { toast(err.message, 'error'); }
       return;
@@ -907,7 +913,9 @@
       });
       if (!confirmed) return;
       try {
-        const body = action === 'reject' ? { id: id, reason: 'Rejected by administrator' } : { id: id };
+        const box = document.querySelector(`[data-reason-for="${CSS.escape(id || '')}"]`);
+        const reason = (box && box.value.trim()) || 'Rejected by administrator';
+        const body = action === 'reject' ? { id: id, reason: reason } : { id: id };
         await post(`/api/v1/admin/recovery-requests/${action}`, body);
         toast('Recovery request updated');
         mountView('recovery');
@@ -1023,6 +1031,17 @@
       });
       if (!ok) return;
       body = { user_id: id, remove: true };
+    } else if (btn.getAttribute('data-admin-pick')) {
+      // Bundle 216: the W5 side panel picks the level on the card itself.
+      const role = btn.getAttribute('data-admin-pick');
+      const label = { owner: 'Owner', operator: 'Operator', security: 'Security', auditor: 'Auditor' }[role] || role;
+      const ok = await confirmDialog({
+        title: mode === 'level' ? `Change ${name} to ${label}?` : `Make ${name} an admin (${label})?`,
+        confirmLabel: mode === 'level' ? 'Save level' : 'Make admin',
+        message: 'Their phone gets it when it reaches the server. Other phones see the crown even offline.',
+      });
+      if (!ok) return;
+      body = { user_id: id, role };
     } else {
       const role = await adminLevelDialog(name, mode === 'level' ? btn.getAttribute('data-user-role') : '');
       if (!role) return;
@@ -1031,6 +1050,7 @@
     try {
       await post('/api/v1/admin/user-admin', body);
       toast(body.remove ? `${name} is no longer an admin` : `${name} is now an admin`);
+      state.people216 = null;
       mountView('users');
     } catch (err) { toast(err.message, 'error'); }
   });
@@ -1188,6 +1208,66 @@
     if (rateLimited()) return;
     loadNotifications();
     if (state.view === 'dashboard') mountView('dashboard', { quiet: true });
+  });
+
+  // ------------------------------------------------------- Bundle 216 photos
+  // Person cells carry data-avatar-user; the photo comes from the admin avatar
+  // route with the bearer token and is shown from a blob: URL (cached).
+  const avatarCache216 = new Map();
+  async function hydrateAvatars216(root) {
+    const spots = (root || document).querySelectorAll('[data-avatar-user]:not([data-avatar-done])');
+    spots.forEach(async (spot) => {
+      spot.setAttribute('data-avatar-done', '1');
+      const id = spot.getAttribute('data-avatar-user');
+      if (!id) return;
+      let url = avatarCache216.get(id);
+      if (url === undefined) {
+        const pending = blob(`/api/v1/admin/users/${encodeURIComponent(id)}/avatar`)
+          .then((url) => url || null).catch(() => null);
+        avatarCache216.set(id, pending);
+        url = pending;
+      }
+      const resolved = await url;
+      avatarCache216.set(id, resolved);
+      if (resolved) {
+        spot.style.backgroundImage = `url("${resolved}")`;
+        spot.classList.add('has-photo');
+      }
+    });
+  }
+  let hydrateTimer216 = 0;
+  new MutationObserver(() => {
+    clearTimeout(hydrateTimer216);
+    hydrateTimer216 = setTimeout(() => hydrateAvatars216(document), 30);
+  }).observe(document.body, { childList: true, subtree: true });
+
+  document.addEventListener('click', async (event) => {
+    const rule = event.target.closest('[data-wifi-rule][data-user-id]');
+    if (rule) {
+      const id = rule.getAttribute('data-user-id');
+      const value = rule.getAttribute('data-wifi-rule');
+      try {
+        await post(`/api/v1/admin/user/network-policy?id=${encodeURIComponent(id)}`, { wifi_radio_policy: value || null });
+        rule.parentElement.querySelectorAll('[data-wifi-rule]').forEach((b) => b.classList.toggle('on', b === rule));
+        toast('Wi-Fi rule saved');
+      } catch (err) { toast(err.message, 'error'); }
+      return;
+    }
+    const all = event.target.closest('[data-signout-all]');
+    if (all) {
+      const id = all.getAttribute('data-signout-all');
+      const ok = await confirmDialog({
+        title: 'Sign out all phones?', destructive: true, confirmLabel: 'Sign out all',
+        message: 'Every phone of this person must sign in again before it can use the server.',
+      });
+      if (!ok) return;
+      try {
+        const data = await api('/api/v1/admin/sessions?limit=200');
+        const mine = (Array.isArray(data.sessions) ? data.sessions : []).filter((x) => x.user_id === id && x.active);
+        for (const x of mine) await post(`/api/v1/admin/session/revoke?id=${encodeURIComponent(x.id)}`);
+        toast(`Signed out ${mine.length} phone${mine.length === 1 ? '' : 's'}`);
+      } catch (err) { toast(err.message, 'error'); }
+    }
   });
 
   // ------------------------------------------------------------------- boot

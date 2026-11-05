@@ -48,6 +48,9 @@ type WSMessage struct {
 	MeshAvailable        bool         `json:"mesh_available,omitempty"`
 	// Bundle G5: group receipts (many ids at once).
 	MessageIDs []string `json:"message_ids,omitempty"`
+
+	// Bundle 216: phones this phone reaches without the server (link map).
+	Neighbors []Neighbor `json:"neighbors,omitempty"`
 }
 
 func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
@@ -166,6 +169,7 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 				// Offline ~60s after the last real change while both stayed
 				// connected. Floor traffic: one ~200B frame per publish cycle.
 				a.broadcastPresence(deviceID, d)
+				a.noteNeighbors216(deviceID, msg.Neighbors)
 				continue
 			case "call_invite":
 				if strings.TrimSpace(msg.TransportMode) != "offline_mesh" {

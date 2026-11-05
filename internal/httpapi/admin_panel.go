@@ -19,6 +19,10 @@ type AdminUser struct {
 	OnlineDevices   int    `json:"online_devices"`
 	// Bundle 214: "" or the admin level of an app user made admin.
 	AdminRole string `json:"admin_role"`
+	// Bundle 216: names and photos for the admin pages.
+	DisplayName string `json:"display_name,omitempty"`
+	HasAvatar   bool   `json:"has_avatar"`
+	LastSeenAt  string `json:"last_seen_at,omitempty"`
 }
 
 type AdminAuthSession struct {
@@ -33,6 +37,8 @@ type AdminAuthSession struct {
 	ExpiresAt  string `json:"expires_at"`
 	RevokedAt  string `json:"revoked_at,omitempty"`
 	Active     bool   `json:"active"`
+	// Bundle 216.
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 type AdminOwnSession struct {
@@ -56,6 +62,10 @@ type AdminTransfer struct {
 	ContentType string `json:"content_type"`
 	Status      string `json:"status"`
 	CreatedAt   string `json:"created_at"`
+	// Bundle 216: who sent it and what kind (never the file name).
+	OwnerUserID string `json:"owner_user_id,omitempty"`
+	OwnerName   string `json:"owner_name,omitempty"`
+	Kind        string `json:"kind,omitempty"`
 }
 
 type AdminNetworkHealth struct {
@@ -75,6 +85,12 @@ type AdminSettings struct {
 	SecurityAlertThreshold  int  `json:"security_alert_threshold"`
 	ReadOnlyServerConfig    bool `json:"read_only_server_config"`
 	BackupAvailable         bool `json:"backup_available"`
+	// Bundle 216: last backup and the real server limits (read only).
+	LastBackupAt     string `json:"last_backup_at,omitempty"`
+	LastBackupBytes  int64  `json:"last_backup_bytes,omitempty"`
+	MaxFileBytes     int64  `json:"max_file_bytes,omitempty"`
+	DeviceQuotaBytes int64  `json:"device_quota_bytes,omitempty"`
+	TLSEnabled       bool   `json:"tls_enabled"`
 }
 
 // AdminPrivacyPolicy reports what this server does with user content. Message
@@ -154,6 +170,8 @@ func (a *API) AdminUsers(w http.ResponseWriter, r *http.Request) {
 	if hasMore {
 		out = out[:params.Limit]
 	}
+	rows.Close()
+	a.enrichUsers216(out)
 	resp := struct {
 		Users []AdminUser `json:"users"`
 		PageInfo
@@ -249,6 +267,8 @@ func (a *API) AdminSessions(w http.ResponseWriter, r *http.Request) {
 	if hasMore {
 		out = out[:params.Limit]
 	}
+	rows.Close()
+	a.enrichSessions216(out)
 	resp := struct {
 		Sessions []AdminAuthSession `json:"sessions"`
 		PageInfo
@@ -406,6 +426,8 @@ func (a *API) AdminTransfers(w http.ResponseWriter, r *http.Request) {
 	if hasMore {
 		out = out[:params.Limit]
 	}
+	rows.Close()
+	a.enrichTransfers216(out)
 	resp := struct {
 		Transfers []AdminTransfer `json:"transfers"`
 		PageInfo
@@ -464,6 +486,7 @@ func (a *API) AdminGetSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = admin
 	settings := AdminSettings{DashboardRefreshSeconds: 15, SecurityAlertThreshold: 1, ReadOnlyServerConfig: true, BackupAvailable: true}
+	a.settingsExtras216(&settings)
 	var raw string
 	if err := a.store.DB().QueryRow(`SELECT value FROM admin_settings WHERE key='dashboard_refresh_seconds'`).Scan(&raw); err == nil {
 		if v, e := strconv.Atoi(raw); e == nil && v >= 5 && v <= 120 {

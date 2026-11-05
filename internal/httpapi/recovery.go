@@ -388,7 +388,7 @@ func (a *API) AdminRecoveryRequests(w http.ResponseWriter, r *http.Request) {
 		args = append(args, params.Cursor.Key, params.Cursor.Key, params.Cursor.ID)
 	}
 	args = append(args, params.Limit+1)
-	rows, err := a.store.DB().Query(`SELECT r.id,u.username,r.status,r.created_at,r.expires_at,r.target_device_id,r.target_device_name,r.target_platform,COALESCE(r.approved_at,''),COALESCE(r.rejected_at,''),COALESCE(r.rejected_reason,''),COALESCE(r.recovery_expires_at,'') FROM account_recovery_requests r JOIN users u ON u.id=r.user_id `+where+` ORDER BY r.created_at DESC,r.id DESC LIMIT ?`, args...)
+	rows, err := a.store.DB().Query(`SELECT r.id,u.username,r.user_id,r.status,r.created_at,r.expires_at,r.target_device_id,r.target_device_name,r.target_platform,COALESCE(r.approved_at,''),COALESCE(r.rejected_at,''),COALESCE(r.rejected_reason,''),COALESCE(r.recovery_expires_at,'') FROM account_recovery_requests r JOIN users u ON u.id=r.user_id `+where+` ORDER BY r.created_at DESC,r.id DESC LIMIT ?`, args...)
 	if err != nil {
 		writeError(w, 500, "failed to list recovery requests")
 		return
@@ -397,6 +397,9 @@ func (a *API) AdminRecoveryRequests(w http.ResponseWriter, r *http.Request) {
 	type row struct {
 		ID                string `json:"id"`
 		Username          string `json:"username"`
+		UserID            string `json:"user_id,omitempty"`
+		DisplayName       string `json:"display_name,omitempty"`
+		HasAvatar         bool   `json:"has_avatar"`
 		Status            string `json:"status"`
 		CreatedAt         string `json:"created_at"`
 		ExpiresAt         string `json:"expires_at"`
@@ -411,7 +414,7 @@ func (a *API) AdminRecoveryRequests(w http.ResponseWriter, r *http.Request) {
 	out := make([]row, 0, params.Limit)
 	for rows.Next() {
 		var x row
-		if err := rows.Scan(&x.ID, &x.Username, &x.Status, &x.CreatedAt, &x.ExpiresAt, &x.TargetDeviceID, &x.TargetDeviceName, &x.TargetPlatform, &x.ApprovedAt, &x.RejectedAt, &x.RejectedReason, &x.RecoveryExpiresAt); err != nil {
+		if err := rows.Scan(&x.ID, &x.Username, &x.UserID, &x.Status, &x.CreatedAt, &x.ExpiresAt, &x.TargetDeviceID, &x.TargetDeviceName, &x.TargetPlatform, &x.ApprovedAt, &x.RejectedAt, &x.RejectedReason, &x.RecoveryExpiresAt); err != nil {
 			writeError(w, 500, "failed to read recovery requests")
 			return
 		}
@@ -424,6 +427,16 @@ func (a *API) AdminRecoveryRequests(w http.ResponseWriter, r *http.Request) {
 	hasMore := len(out) > params.Limit
 	if hasMore {
 		out = out[:params.Limit]
+	}
+	rows.Close()
+	ids216 := make([]string, len(out))
+	for i := range out {
+		ids216[i] = out[i].UserID
+	}
+	people216 := a.people216(ids216)
+	for i := range out {
+		p := people216[out[i].UserID]
+		out[i].DisplayName, out[i].HasAvatar = firstNonEmpty216(p.Display, out[i].Username), p.HasAvatar
 	}
 	resp := struct {
 		RecoveryRequests []row `json:"recovery_requests"`

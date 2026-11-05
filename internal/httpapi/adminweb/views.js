@@ -108,9 +108,9 @@ LL.views = {};
   const dashboard = {
     id: 'dashboard',
     title: 'Dashboard',
-    subtitle: 'Operational overview',
+    subtitle: 'How the server and phones are doing',
     icon: 'i-dashboard',
-    group: 'Operations',
+    group: 'People',
     async mount(el, ctx) {
       const range = ctx.state.analyticsRange || '24h';
       const longRange = !!LONG_RANGES[range];
@@ -145,63 +145,42 @@ LL.views = {};
 
       const parts = [];
 
-      // ---- header
-      parts.push(pollRegion('header', `<div class="section-head">
-        <div class="grow">
-          <h1 class="type-page-title">Overview</h1>
-          <span class="sub">${analytics.ok && analytics.data.generated_at
-            ? 'Updated ' + ui.esc(fmt.relative(analytics.data.generated_at)) + ' · '
-            : ''}Operational metadata from the LocalLink server.</span>
-        </div>
-        <div class="section-actions">
-          ${ui.badge('Range: ' + ui.esc(range), 'primary')}
-          ${ui.statusBadge(overall, { label: 'Overall: ' + ui.statusInfo(overall).label })}
-        </div>
-      </div>`))
-
-      // ---- metric area
-      const metricCards = [];
+      // ---- Bundle 216 (W2): 4 tiles, the Map card and 'Needs a look'.
+      parts.push(pollRegion('header', `<div class="bar216" style="justify-content:flex-end;margin:0">
+          ${ui.statusBadge(overall, { label: 'Server: ' + ui.statusInfo(overall).label })}
+        </div>`));
       if (summaryData) {
-        metricCards.push(ui.metricCard({
-          label: 'Total users', value: fmt.number(summaryData.users), icon: 'i-users',
-          context: `+${fmt.number(num(totals.users))} ${windowLabel}`, sparkline: sparkValues(series.users),
-        }));
-        metricCards.push(ui.metricCard({
-          label: 'Online devices', value: fmt.number(summaryData.online_devices), icon: 'i-wifi',
-          context: `of ${fmt.number(summaryData.devices)} registered`,
-        }));
-        metricCards.push(ui.metricCard({
-          label: 'Registered devices', value: fmt.number(summaryData.devices), icon: 'i-devices',
-          context: `+${fmt.number(num(totals.devices))} ${windowLabel}`, sparkline: sparkValues(series.devices),
-        }));
-        metricCards.push(ui.metricCard({
-          label: 'Messages', value: fmt.number(summaryData.messages), icon: 'i-activity',
-          context: `+${fmt.number(num(totals.messages))} ${windowLabel}`, sparkline: sparkValues(series.messages),
-        }));
-        metricCards.push(ui.metricCard({
-          label: 'Active calls', value: fmt.number(summaryData.active_calls), icon: 'i-call',
-          context: `${fmt.number(num(totals.calls))} started ${windowLabel}`,
-        }));
-        metricCards.push(ui.metricCard({
-          label: 'Active sessions', value: fmt.number(summaryData.active_sessions), icon: 'i-key',
-          context: 'Authenticated device sessions',
-        }));
-        metricCards.push(ui.metricCard({
-          label: 'Storage used', value: fmt.bytes(summaryData.file_storage_bytes), icon: 'i-database',
-          context: `Database ${fmt.bytes(summaryData.db_bytes)}`,
-        }));
-        metricCards.push(ui.metricCard({
-          label: 'Security alerts', value: fmt.number(summaryData.security_alerts), icon: 'i-shield',
-          accent: num(summaryData.security_alerts) > 0 ? 'warning' : 'success',
-          context: 'Events in the last 24 hours', sparkline: sparkValues(series.security_events),
-        }));
+        const warnings = num(summaryData.security_alerts);
+        const tile = (label, value, color) => `<div class="tile216"><small>${ui.esc(label)}</small><b style="color:${color}">${ui.esc(value)}</b></div>`;
+        const tiles = `<div class="tiles216">
+            ${tile('People', fmt.number(summaryData.users), 'var(--text-primary)')}
+            ${tile('Phones online', `${fmt.number(summaryData.online_devices)} / ${fmt.number(summaryData.devices)}`, '#4ade80')}
+            ${tile(range === '24h' ? 'Messages today' : `Messages (${range})`, fmt.number(num(totals.messages)), '#7aa7ff')}
+            ${tile('Warnings', fmt.number(warnings), warnings ? '#fbbf24' : '#4ade80')}
+          </div>`;
+        const look = [];
+        if (num(summaryData.pending_recoveries)) look.push([`${fmt.number(summaryData.pending_recoveries)} recovery request(s) waiting`, 'recovery', 'orange']);
+        if (warnings) look.push([`${fmt.number(warnings)} warning(s) in the last 24 hours`, 'security', 'red']);
+        if (num(securityCounts.locked_users)) look.push([`${fmt.number(securityCounts.locked_users)} locked account(s)`, 'security', 'grey']);
+        const net = networkData || {};
+        const mapCard = ui.panel({
+          title: 'Map',
+          body: `<div class="type-caption">${fmt.number(summaryData.online_devices)} phone(s) on the server right now${net.wifi_direct_connected ? ` \u00b7 ${fmt.number(net.wifi_direct_connected)} on Wi-Fi Direct` : ''}</div>
+            <button class="btn btn-sm" style="margin-top:12px" data-nav="map">Open map \u203a</button>`,
+        });
+        const lookCard = ui.panel({
+          title: 'Needs a look',
+          body: look.length ? look.map(([text, view, tone]) => `<div class="map216-row" data-nav="${view}" style="cursor:pointer">
+              <span>${ui.esc(text)}</span>${ui.pill216('Open', tone)}</div>`).join('')
+            : '<div class="empty216">Nothing needs a look.</div>',
+        });
+        parts.push(pollRegion('metrics', `${tiles}<div class="split-1-1">${mapCard}${lookCard}</div>`));
       } else {
-        metricCards.push(`<div class="state error" style="grid-column:1/-1">
-          ${ui.icon('i-alert')}<strong>Metrics unavailable</strong>
-          <p>${ui.esc(summary.error || 'The summary endpoint did not respond.')}</p>
-          <button class="btn btn-sm" data-retry="dashboard">${ui.icon('i-refresh')}Retry</button></div>`);
+        parts.push(pollRegion('metrics', `<div class="state error">
+          ${ui.icon('i-alert')}<strong>Numbers not available</strong>
+          <p>${ui.esc(summary.error || 'The server did not answer.')}</p>
+          <button class="btn btn-sm" data-retry="dashboard">${ui.icon('i-refresh')}Retry</button></div>`));
       }
-      parts.push(pollRegion('metrics', `<div class="grid grid-metrics">${metricCards.join('')}</div>`));
 
       // ---- analytics
       const messagePoints = seriesToList(series.messages, longRange);
@@ -437,185 +416,257 @@ LL.views = {};
     }
   }
 
+  // ------------------------------------------------------------ Bundle 216 kit
+  // People lookup (name, photo, admin level, blocked) shared by the pages so a
+  // crown or a grey photo looks the same everywhere. Cached for 30 seconds.
+  async function people216(ctx) {
+    const cache = ctx.state.people216;
+    if (cache && Date.now() - cache.at < 30000) return cache.map;
+    const map = {};
+    try {
+      const data = await ctx.api('/api/v1/admin/users?limit=200');
+      (Array.isArray(data.users) ? data.users : []).forEach((u) => { map[u.id] = u; });
+    } catch (err) {
+      // Names still come from each list's own fields.
+    }
+    ctx.state.people216 = { at: Date.now(), map };
+    return map;
+  }
+
+  function who216(map, userId, name, sub, extra) {
+    const u = (userId && map[userId]) || {};
+    return ui.person216(Object.assign({
+      userId: userId,
+      name: name || u.display_name || u.username || '—',
+      sub: sub,
+      hasAvatar: !!u.has_avatar,
+      admin: !!u.admin_role,
+      blocked: u.status === 'suspended',
+    }, extra || {}));
+  }
+
+  const STATUS_216 = {
+    active: ['Active', 'green', 'Can use LinkUp'],
+    suspended: ['Suspended', 'orange', "Can't sign in for now"],
+    disabled: ['Off', 'red', 'Account closed'],
+  };
+  function status216(s) {
+    const x = STATUS_216[s] || [fmt.titleCase(s || 'unknown'), 'grey'];
+    return ui.pill216(x[0], x[1]);
+  }
+
+  function linkNow216(d) {
+    if (d.status === 'revoked') return ui.pill216('Removed', 'red');
+    if (d.online || d.server_connected) return ui.pill216('Server', 'green');
+    if (d.wifi_direct_connected) return ui.pill216('Wi-Fi Direct', 'orange');
+    if (d.mesh_available) return ui.pill216('Mesh', 'purple');
+    if (d.lan_available) return ui.pill216('Local Wi-Fi', 'teal');
+    return ui.pill216('Offline', 'grey');
+  }
+
+  function head216(title, sub, right) {
+    return `<div class="bar216" style="justify-content:space-between"><div><div style="font-size:15px;font-weight:600">${ui.esc(title)}</div>${sub ? `<div class="type-caption">${ui.esc(sub)}</div>` : ''}</div><div class="row gap-sm">${right || ''}</div></div>`;
+  }
+
+  const WIFI_RULES_216 = [
+    { value: '', label: 'Default' }, { value: 'allowed', label: 'Allowed' },
+    { value: 'forced_on', label: 'Always on' }, { value: 'forced_off', label: 'Always off' },
+  ];
+
   // ---------------------------------------------------------------------- users
+  // W4 + W5: chips instead of drop-downs, photo + crown + level in the row and
+  // one Manage button that opens the side panel.
   const users = {
     id: 'users',
     title: 'Users',
-    subtitle: 'Accounts and profiles',
+    subtitle: 'People with an account. Make admin, change status.',
     icon: 'i-users',
-    group: 'Operations',
-      // Sidebar count from the server summary.
-      navCount: 'users',
+    group: 'People',
+    navCount: 'users',
     async mount(el, ctx) {
+      const host = document.getElementById('modal-host');
+      if (host && host.querySelector('.side216')) host.innerHTML = '';
       const query = ctx.state.filters.users || { search: '', status: '', admin: '' };
       el.innerHTML = ui.skeletonPanel(6);
       const result = await settle(ctx.api('/api/v1/admin/users?limit=200'));
       if (!result.ok) { el.innerHTML = ui.panel({ title: 'Users', body: ui.errorState(result.error, 'users') }); return; }
 
       const all = Array.isArray(result.data.users) ? result.data.users : [];
-      const search = (query.search || '').toLowerCase();
+      const map = {};
+      all.forEach((u) => { map[u.id] = u; });
+      ctx.state.people216 = { at: Date.now(), map };
+      const search = (query.search || '').toLowerCase().replace(/^@/, '');
       const filtered = all.filter((u) => {
-        if (search && String(u.username || '').toLowerCase().indexOf(search) < 0) return false;
+        const hay = `${u.display_name || ''} ${u.username || ''}`.toLowerCase();
+        if (search && hay.indexOf(search) < 0) return false;
         if (query.status && u.status !== query.status) return false;
-        // Bundle 214: Admins filter.
+        // Bundle 214: Admins filter (key: 'admin').
         if (query.admin === 'yes' && !u.admin_role) return false;
         if (query.admin === 'no' && u.admin_role) return false;
         return true;
       });
       const adminCount = all.filter((u) => u.admin_role).length;
-      const roleLabel = (r) => ({ owner: 'Owner', operator: 'Operator', security: 'Security', auditor: 'Auditor' }[r] || r);
-      // Bundle 214: make / remove admin (web owner only; app admins never see this page's buttons work).
-      const webOwner = ctx.can('manageUsers');
-      const adminCell = (u) => u.admin_role
-        ? `<div>${ui.badge('\u{1F451} ' + roleLabel(u.admin_role), 'warning')}<div class="subtle" style="font-size:11px">phone admin</div></div>`
-        : '<span class="subtle">\u2014</span>';
-      const adminButtons = (u) => {
-        if (!webOwner) return '';
-        const data = `data-user-admin="${ui.esc(u.id)}" data-user-name="${ui.esc(u.username || '')}" data-user-role="${ui.esc(u.admin_role || '')}"`;
-        if (u.admin_role) {
-          return `<button class="btn btn-sm btn-danger" ${data} data-admin-mode="remove">Remove admin</button>
-                  <button class="btn btn-sm" ${data} data-admin-mode="level">Level</button>`;
-        }
-        if (u.status === 'disabled') return '';
-        return `<button class="btn btn-sm btn-primary" ${data} data-admin-mode="make">Make admin\u2026</button>`;
-      };
-
+      const chip = query.admin === 'yes' ? 'admins' : (query.status || 'all');
+      const columns = [
+        { label: 'Person' }, { label: 'Admin' }, { label: 'Phones', numeric: true },
+        { label: 'Status' }, { label: 'Last seen' }, { label: '' },
+      ].map((c) => (c.label === 'Admin' ? { label: 'Admin level' } : c));
       const rows = filtered.map((u) => [
-        `<div><span class="cell-primary">${emptyText(u.username)}</span>
-           <div class="mono subtle">${emptyText(u.id)}</div></div>`,
-        ui.statusBadge(u.status),
+        who216(map, u.id, u.display_name || u.username, '@' + (u.username || ''), { online: num(u.online_devices) > 0, size: 32 }),
+        u.admin_role ? ui.pill216(ui.LEVELS_216[u.admin_role] || u.admin_role, 'gold') : '<span class="subtle">\u2014</span>',
         `<span>${fmt.number(u.devices)}</span>`,
-        `<span>${fmt.number(u.online_devices)}</span>`,
-        adminCell(u),
-        `<span class="subtle">${ui.esc(fmt.dateTime(u.created_at))}</span>`,
-        tableActions([
-          ctx.can('manageUsers')
-            ? `<select class="input" data-user-status="${ui.esc(u.id)}" aria-label="Account status">
-                 ${['active', 'suspended', 'disabled'].map((s) =>
-                   `<option value="${s}" ${u.status === s ? 'selected' : ''}>${s}</option>`).join('')}
-               </select>`
-            : `<span class="subtle">Owner only</span>`,
-          `<button class="btn btn-sm" data-user-devices="${ui.esc(u.id)}">Devices</button>`,
-          adminButtons(u),
-        ]),
+        status216(u.status),
+        `<span>${ui.esc(num(u.online_devices) > 0 ? 'Online now' : ui.when216(u.last_seen_at))}</span>`,
+        `<button class="btn btn-sm" data-user-manage="${ui.esc(u.id)}">Manage</button>`,
       ]);
 
       el.innerHTML = `
         <div class="section">
-          ${ui.sectionHead({ title: 'Users', subtitle: 'Account state, device counts, admin role and administrative actions', icon: 'i-users', actions: `${ui.badge(`${adminCount} app admins`, 'warning')} ${ui.badge(`${all.length} accounts`, 'neutral')}` })}
+          <div class="bar216" style="justify-content:space-between">
+            <div class="bar216" style="margin:0">
+              <input class="input search216" type="search" data-filter-search placeholder="Search name or @username" value="${ui.esc(query.search || '')}" aria-label="Search name or @username">
+              ${ui.chips216([
+                { value: 'all', label: 'All' }, { value: 'admins', label: 'Admins' }, { value: 'active', label: 'Active' },
+                { value: 'suspended', label: 'Suspended' }, { value: 'disabled', label: 'Off' },
+              ], chip, 'data-users-chip')}
+            </div>
+            <div class="row gap-sm" title="app admins">${ui.pill216(`${adminCount} admins`, 'gold')} ${ui.pill216(`${all.length} people`, 'grey')}</div>
+          </div>
           ${ui.panel({
             pad0: true,
-            body: `<div style="padding:16px 16px 0">${ui.filterBar({
-              search: true,
-              searchPlaceholder: 'Search username…',
-              searchValue: query.search || '',
-              selects: [{
-                key: 'status', label: 'Status', value: query.status || '',
-                options: [
-                  { value: '', label: 'All statuses' },
-                  { value: 'active', label: 'Active' },
-                  { value: 'suspended', label: 'Suspended' },
-                  { value: 'disabled', label: 'Disabled' },
-                ],
-              }, {
-                key: 'admin', label: 'Admins', value: query.admin || '',
-                options: [
-                  { value: '', label: 'Admins: All' },
-                  { value: 'yes', label: 'Admins only' },
-                  { value: 'no', label: 'Not admins' },
-                ],
-              }],
-            })}</div>
-            <div style="padding:16px">${ui.table({
-              columns: [
-                { label: 'Username' }, { label: 'Status' }, { label: 'Devices', numeric: true },
-                { label: 'Online', numeric: true }, { label: 'Admin' }, { label: 'Created' }, { label: 'Actions' },
-              ],
-              rows,
-              emptyTitle: 'No accounts match',
-              emptyMessage: 'Adjust the search or status filter to see accounts.',
-            })}</div>`,
+            body: `${rows.length ? `<div style="padding:0 4px">${ui.table({ columns, rows })}</div>` : ''}
+              <div class="empty216">${rows.length ? '' : 'No one found? Try another name or filter.'}</div>`,
           })}
         </div>`;
+
+      el.querySelectorAll('[data-users-chip]').forEach((b) => b.addEventListener('click', () => {
+        const v = b.getAttribute('data-users-chip');
+        ctx.state.filters.users = Object.assign({}, query, { admin: v === 'admins' ? 'yes' : '', status: ['active', 'suspended', 'disabled'].indexOf(v) >= 0 ? v : '' });
+        ctx.refresh();
+      }));
+      el.querySelectorAll('[data-user-manage]').forEach((b) => b.addEventListener('click', () => {
+        const u = map[b.getAttribute('data-user-manage')];
+        if (u) manage216(u, ctx);
+      }));
     },
   };
+
+  // W5: the side panel. Buttons reuse the shell handlers (data-user-status,
+  // data-user-admin with data-admin-mode="make" / "remove" / "level").
+  async function manage216(u, ctx) {
+    const host = document.getElementById('modal-host');
+    if (!host) return;
+    const owner = ctx.can('manageUsers');
+    const canRule = ctx.can('manageNetworkPolicy');
+    const name = u.display_name || u.username || '';
+    const data = `data-user-admin="${ui.esc(u.id)}" data-user-name="${ui.esc(name)}" data-user-role="${ui.esc(u.admin_role || '')}"`;
+    const levels = [
+      ['', 'Not admin', 'Normal user'],
+      ['owner', 'Owner', 'Everything, also blocking and app version'],
+      ['operator', 'Operator', 'Phones, Wi-Fi rules, recovery'],
+      ['security', 'Security', 'Recovery requests, can look at the rest'],
+      ['auditor', 'Auditor', 'Can only look'],
+    ];
+    const levelCard = ([value, label, help]) => {
+      const on = (u.admin_role || '') === value;
+      let attrs = 'disabled';
+      if (owner && !on) {
+        if (!value) attrs = `${data} data-admin-mode="remove"`;
+        else if (u.admin_role) attrs = `${data} data-admin-mode="level" data-admin-pick="${value}"`;
+        else attrs = `${data} data-admin-mode="make" data-admin-pick="${value}"`;
+      }
+      return `<button type="button" class="opt216 ${on ? 'on' : ''}" ${attrs}><b>${value ? ui.crown216(12) + ' ' : ''}${ui.esc(label)}</b><small>${ui.esc(help)}</small></button>`;
+    };
+    const statusCard = (s) => {
+      const x = STATUS_216[s];
+      const on = u.status === s;
+      return `<button type="button" class="opt216 ${on ? 'on' : ''}" ${owner && !on ? `data-user-status="${ui.esc(u.id)}" value="${s}"` : 'disabled'}><b>${ui.esc(x[0])}</b><small>${ui.esc(x[2])}</small></button>`;
+    };
+    host.innerHTML = `<div class="side216-scrim" data-side216-close></div>
+      <aside class="side216" role="dialog" aria-modal="true" aria-label="Manage ${ui.esc(name)}">
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          ${ui.person216({ userId: u.id, name, sub: '@' + (u.username || ''), hasAvatar: !!u.has_avatar, admin: !!u.admin_role, blocked: u.status === 'suspended', size: 48 })}
+          <button class="btn btn-icon" data-side216-close aria-label="Close">${ui.icon('i-close')}</button>
+        </div>
+        <h3>Status</h3>${['active', 'suspended', 'disabled'].map(statusCard).join('')}
+        <h3>Admin level</h3>${levels.map(levelCard).join('')}
+        ${owner ? '' : '<div class="type-caption">Only an Owner can change status or admin level.</div>'}
+        <h3>Wi-Fi rule</h3>
+        <div data-wifi-rule-host>${ui.chips216(WIFI_RULES_216, '__loading', 'disabled data-wifi-rule')}</div>
+        <h3>Phones</h3>
+        <button class="btn btn-sm" data-user-devices="${ui.esc(u.id)}">See phones (${fmt.number(u.devices)})</button>
+        ${owner ? `<button class="btn btn-sm btn-danger" data-signout-all="${ui.esc(u.id)}" style="margin-left:8px">Sign out all phones</button>` : ''}
+      </aside>`;
+    host.querySelectorAll('[data-side216-close]').forEach((b) => b.addEventListener('click', () => { host.innerHTML = ''; }));
+    try {
+      const policy = await ctx.api(`/api/v1/admin/user/network-policy?id=${encodeURIComponent(u.id)}`);
+      const current = (policy && policy.user_wifi_radio_policy) || '';
+      const box = host.querySelector('[data-wifi-rule-host]');
+      if (box) {
+        box.innerHTML = ui.chips216(WIFI_RULES_216, current, canRule ? `data-user-id="${ui.esc(u.id)}" data-wifi-rule` : 'disabled data-wifi-rule');
+      }
+    } catch (err) {
+      const box = host.querySelector('[data-wifi-rule-host]');
+      if (box) box.innerHTML = `<div class="type-caption">${ui.esc(err.message)}</div>`;
+    }
+  }
 
   // -------------------------------------------------------------------- devices
   const devices = {
     id: 'devices',
     title: 'Devices',
-    subtitle: 'Registered hardware',
+    subtitle: 'Every phone that signed in. Rename or remove.',
     icon: 'i-devices',
-    group: 'Operations',
-      // Sidebar count from the server summary.
-      navCount: 'devices',
+    group: 'People',
+    navCount: 'devices',
     async mount(el, ctx) {
       const query = ctx.state.filters.devices || { search: '', presence: '' };
       el.innerHTML = ui.skeletonPanel(6);
-      const result = await settle(ctx.api('/api/v1/admin/devices?limit=200'));
+      const [result, map] = await Promise.all([settle(ctx.api('/api/v1/admin/devices?limit=200')), people216(ctx)]);
       if (!result.ok) { el.innerHTML = ui.panel({ title: 'Devices', body: ui.errorState(result.error, 'devices') }); return; }
-
       const all = Array.isArray(result.data.devices) ? result.data.devices : [];
       const search = (query.search || '').toLowerCase();
       const filtered = all.filter((d) => {
-        const haystack = `${d.name || ''} ${d.username || ''} ${d.id || ''}`.toLowerCase();
-        if (search && haystack.indexOf(search) < 0) return false;
+        const hay = `${d.name || ''} ${d.username || ''} ${d.display_name || ''}`.toLowerCase();
+        if (search && hay.indexOf(search) < 0) return false;
         if (query.presence === 'online' && !d.online) return false;
-        if (query.presence === 'offline' && d.online) return false;
+        if (query.presence === 'removed' && d.status !== 'revoked') return false;
         return true;
       });
-
+      const manage = ctx.can('manageDevices');
       const rows = filtered.map((d) => [
-        `<div><span class="cell-primary">${emptyText(d.name)}</span>
-           <div class="mono subtle">${emptyText(d.id)}</div></div>`,
-        emptyText(d.username),
-        emptyText(d.platform),
-        ui.statusBadge(d.status),
-        ui.badge(d.online ? 'online' : 'offline', d.online ? 'success' : 'neutral', { dot: true }),
-        `<span class="subtle">${ui.esc(fmt.dateTime(d.created_at))}</span>`,
-        tableActions([
-          ctx.can('manageDevices') ? `<button class="btn btn-sm" data-device-rename="${ui.esc(d.id)}" data-device-name="${ui.esc(d.name)}">Rename</button>` : '',
-          ctx.can('manageDevices') ? `<button class="btn btn-sm" data-device-policy="${ui.esc(d.id)}">Policy</button>` : '',
-          ctx.can('manageDevices')
-            ? `<button class="btn btn-sm btn-danger" data-device-revoke="${ui.esc(d.id)}" ${d.status === 'revoked' ? 'disabled' : ''}>Revoke</button>`
-            : '',
-        ]),
+        `<div class="p216-t"><b>${emptyText(d.name)}</b><small>${emptyText(d.platform)}</small></div>`,
+        d.user_id ? who216(map, d.user_id, d.display_name || d.username, '@' + (d.username || ''), { size: 28 }) : '<span class="subtle">\u2014</span>',
+        linkNow216(d),
+        `<span>${ui.esc(d.online ? 'Online now' : ui.when216(d.last_seen_at))}</span>`,
+        `<span>${d.app_build ? `build ${ui.esc(d.app_build)}` : '\u2014'}</span>`,
+        tableActions(manage && d.status !== 'revoked' ? [
+          `<button class="btn btn-sm" data-device-rename="${ui.esc(d.id)}" data-device-name="${ui.esc(d.name)}">Rename</button>`,
+          `<button class="btn btn-sm" data-device-policy="${ui.esc(d.id)}">Wi-Fi rule</button>`,
+          `<button class="btn btn-sm btn-danger" data-device-revoke="${ui.esc(d.id)}">Remove phone</button>`,
+        ] : []),
       ]);
-
       const online = all.filter((d) => d.online).length;
       el.innerHTML = `
         <div class="section">
-          ${ui.sectionHead({
-            title: 'Devices', subtitle: 'Presence, platform and transport policy for every registered device',
-            icon: 'i-devices',
-            actions: `${ui.badge(`${all.length} registered`, 'neutral')}${ui.badge(`${online} online`, 'success', { dot: true })}`,
-          })}
+          <div class="bar216" style="justify-content:space-between">
+            <div class="bar216" style="margin:0">
+              <input class="input search216" type="search" data-filter-search placeholder="Search phone or person" value="${ui.esc(query.search || '')}" aria-label="Search phone or person">
+              ${ui.chips216([{ value: '', label: 'All' }, { value: 'online', label: 'Online' }, { value: 'removed', label: 'Removed' }], query.presence || '', 'data-devices-chip')}
+            </div>
+            <div class="row gap-sm">${ui.pill216(`${online} online`, 'green')} ${ui.pill216(`${all.length} phones`, 'grey')}</div>
+          </div>
           ${ui.panel({
             pad0: true,
-            body: `<div style="padding:16px 16px 0">${ui.filterBar({
-              search: true,
-              searchPlaceholder: 'Search device, user or id…',
-              searchValue: query.search || '',
-              selects: [{
-                key: 'presence', label: 'Presence', value: query.presence || '',
-                options: [
-                  { value: '', label: 'Any presence' },
-                  { value: 'online', label: 'Online' },
-                  { value: 'offline', label: 'Offline' },
-                ],
-              }],
-            })}</div>
-            <div style="padding:16px">${ui.table({
-              columns: [
-                { label: 'Device' }, { label: 'User' }, { label: 'Platform' }, { label: 'State' },
-                { label: 'Presence' }, { label: 'Registered' }, { label: 'Actions' },
-              ],
-              rows,
-              emptyTitle: 'No devices match',
-              emptyMessage: 'Adjust the filters to see registered devices.',
-            })}</div>`,
+            body: rows.length
+              ? `<div style="padding:0 4px">${ui.table({ columns: [{ label: 'Phone' }, { label: 'Owner' }, { label: 'Link now' }, { label: 'Last seen' }, { label: 'Build' }, { label: '' }], rows })}</div>`
+              : '<div class="empty216">No phones found. Try another name or filter.</div>',
           })}
         </div>`;
+      el.querySelectorAll('[data-devices-chip]').forEach((b) => b.addEventListener('click', () => {
+        ctx.state.filters.devices = Object.assign({}, query, { presence: b.getAttribute('data-devices-chip') });
+        ctx.refresh();
+      }));
     },
   };
 
@@ -623,142 +674,103 @@ LL.views = {};
   const sessions = {
     id: 'sessions',
     title: 'Sessions',
-    subtitle: 'Authenticated sessions',
+    subtitle: 'Who is signed in right now',
     icon: 'i-key',
-    group: 'Operations',
-      // Sidebar count from the server summary.
-      navCount: 'active_sessions',
+    group: 'People',
+    navCount: 'active_sessions',
     async mount(el, ctx) {
       el.innerHTML = ui.skeletonPanel(5);
-      const [userSessions, adminSessions] = await Promise.all([
+      const [userSessions, adminSessions, map] = await Promise.all([
         settle(ctx.api('/api/v1/admin/sessions?limit=200')),
         settle(ctx.api('/api/v1/admin/admin-sessions')),
+        people216(ctx),
       ]);
-
-      const body = (result, id) => {
-        if (!result.ok) return ui.errorState(result.error, 'sessions');
-        const list = Array.isArray(result.data.sessions) ? result.data.sessions : [];
+      const owner = ctx.can('manageSessions');
+      const people = !userSessions.ok ? ui.errorState(userSessions.error, 'sessions') : (() => {
+        const list = (Array.isArray(userSessions.data.sessions) ? userSessions.data.sessions : []).filter((s) => s.active);
+        if (!list.length) return '<div class="empty216">No one is signed in.</div>';
         return ui.table({
-          columns: [
-            { label: 'User' }, { label: 'Device' }, { label: 'Platform' }, { label: 'Last seen' },
-            { label: 'Expires' }, { label: 'State' }, { label: 'Actions' },
-          ],
+          columns: [{ label: 'Person' }, { label: 'Phone' }, { label: 'Since' }, { label: 'Last used' }, { label: '' }],
           rows: list.map((s) => [
-            emptyText(s.username || s.admin_username),
+            who216(map, s.user_id, s.display_name || s.username, '@' + (s.username || ''), { size: 28 }),
             emptyText(s.device_name),
-            emptyText(s.platform),
-            `<span class="subtle">${ui.esc(fmt.dateTime(s.last_seen_at))}</span>`,
-            `<span class="subtle">${ui.esc(fmt.dateTime(s.expires_at))}</span>`,
-            ui.badge(s.active ? 'active' : 'inactive', s.active ? 'success' : 'neutral', { dot: true }),
-            tableActions([
-              ctx.can('manageSessions')
-                ? `<button class="btn btn-sm ${s.active ? 'btn-danger' : ''}" data-session-revoke="${ui.esc(s.id)}" data-session-kind="${id}" ${s.active ? '' : 'disabled'}>Revoke</button>`
-                : '<span class="subtle">Owner only</span>',
-            ]),
+            `<span>${ui.esc(fmt.dateTime(s.created_at))}</span>`,
+            `<span>${ui.esc(ui.when216(s.last_seen_at))}</span>`,
+            owner ? `<button class="btn btn-sm" data-session-revoke="${ui.esc(s.id)}" data-session-kind="user">Sign out</button>` : '',
           ]),
-          emptyTitle: 'No sessions',
-          emptyMessage: 'No authenticated session is recorded for this view.',
         });
-      };
-
+      })();
+      const admins = !adminSessions.ok ? ui.errorState(adminSessions.error, 'sessions') : (() => {
+        const list = (Array.isArray(adminSessions.data.sessions) ? adminSessions.data.sessions : []).filter((s) => s.active);
+        if (!list.length) return '<div class="empty216">No admin is signed in.</div>';
+        return ui.table({
+          columns: [{ label: 'Admin' }, { label: 'Ends' }, { label: 'Since' }, { label: '' }],
+          rows: list.map((s) => [
+            ui.person216({ name: s.admin_username || s.username, sub: ui.LEVELS_216[s.role] || fmt.titleCase(s.role || ''), admin: true, size: 28 }),
+            `<span>${ui.esc(fmt.dateTime(s.expires_at))}</span>`,
+            `<span>${ui.esc(fmt.dateTime(s.created_at))}</span>`,
+            s.current ? ui.pill216('This one', 'blue')
+              : (owner ? `<button class="btn btn-sm" data-session-revoke="${ui.esc(s.id)}" data-session-kind="admin">Sign out</button>` : ''),
+          ]),
+        });
+      })();
       el.innerHTML = `
         <div class="section">
-          ${ui.sectionHead({ title: 'Sessions', subtitle: 'Device sessions and administrator sessions currently known to the server', icon: 'i-key' })}
-          <div class="split-1-1">
-            ${ui.panel({ title: 'User sessions', body: body(userSessions, 'user') })}
-            ${ui.panel({ title: 'Administrator sessions', subtitle: 'Your admin console sessions', body: body(adminSessions, 'admin') })}
-          </div>
+          ${ui.panel({ title: 'People signed in', body: people })}
+          ${ui.panel({ title: 'Admins signed in', body: admins })}
         </div>`;
     },
   };
 
   // -------------------------------------------------------------------- network
+  // W8: 4 tiles and 'Phones right now' (Phone / Owner / Link now / Linked with)
+  // from the link map (216h), so names and lines match the Map page.
   const network = {
     id: 'network',
-    title: 'Network & Mesh',
-    subtitle: 'Topology and transports',
-    icon: 'i-hub',
-    group: 'Connectivity',
+    title: 'Network & mesh',
+    subtitle: 'How phones reach each other',
+    icon: 'i-wifi',
+    group: 'Network',
     async mount(el, ctx) {
       el.innerHTML = ui.skeletonPanel(5);
-      const [overview, deviceList, policy] = await Promise.all([
-        settle(ctx.api('/api/v1/admin/network')),
-        settle(ctx.api('/api/v1/admin/devices?limit=200')),
-        settle(ctx.api('/api/v1/admin/privacy')),
-      ]);
-
-      const data = overview.ok ? overview.data : null;
-      const devices = deviceList.ok && Array.isArray(deviceList.data.devices) ? deviceList.data.devices : [];
-      const online = devices.filter((d) => d.online);
-      const transports = data ? [
-        { label: 'Server connected', value: num(data.server_connected), tone: 'success' },
-        { label: 'LAN available', value: num(data.lan_available), tone: 'primary' },
-        { label: 'Wi-Fi Direct', value: num(data.wifi_direct_connected), tone: 'info' },
-        { label: 'Mesh capable', value: num(data.mesh_available), tone: 'warning' },
-      ] : [];
-      const maxTransport = Math.max(1, ...transports.map((t) => t.value));
-      const transportBars = transports.map((t) => `
-        <div class="health-row">
-          <div class="health-main">
-            <span class="label">${ui.esc(t.label)}</span>
-            <span class="reading">${fmt.number(t.value)}</span>
-          </div>
-          <div class="meter"><span style="width:${((t.value / maxTransport) * 100).toFixed(1)}%;background:var(--${t.tone === 'primary' ? 'primary' : t.tone})"></span></div>
-        </div>`).join('');
-
-      const platformCounts = {};
-      devices.forEach((d) => { const key = d.platform || 'unknown'; platformCounts[key] = (platformCounts[key] || 0) + 1; });
-      const platformPoints = Object.keys(platformCounts).sort().map((k) => ({ label: k, value: platformCounts[k] }));
-
+      const [links, net] = await Promise.all([settle(ctx.api('/api/v1/admin/link-map')), settle(ctx.api('/api/v1/admin/network'))]);
+      if (!links.ok) { el.innerHTML = ui.panel({ title: 'Network & mesh', body: ui.errorState(links.error, 'network') }); return; }
+      const nodes = Array.isArray(links.data.nodes) ? links.data.nodes : [];
+      const edges = Array.isArray(links.data.edges) ? links.data.edges : [];
+      const byId = {};
+      nodes.forEach((n) => { byId[n.device_id] = n; });
+      const nameOf = (n) => n.display_name || n.username || n.device_name || 'Phone';
+      const peers = (id) => edges.filter((e) => e.from !== 'server' && (e.from === id || e.to === id))
+        .map((e) => byId[e.from === id ? e.to : e.from]).filter(Boolean).map(nameOf);
+      const reached = nodes.filter((n) => n.online || n.link);
+      const count = (k) => nodes.filter((n) => n.link === k).length;
+      const data = net.ok ? net.data : {};
+      const tile = (label, value, color) => `<div class="tile216"><small>${ui.esc(label)}</small><b style="color:${color}">${ui.esc(fmt.number(value))}</b></div>`;
       el.innerHTML = `
         <div class="section">
-          ${ui.sectionHead({
-            title: 'Network & mesh', subtitle: 'Live transport coverage reported by devices',
-            icon: 'i-hub',
-            actions: `<button class="btn btn-sm" data-topology="1">${ui.icon('i-hub')}Open network topology</button>`,
-          })}
-          <div class="grid grid-3">
-            ${ui.metricCard({ label: 'Devices online', value: fmt.number(data ? data.online_devices : online.length), icon: 'i-wifi', context: `${devices.length} registered` })}
-            ${ui.metricCard({ label: 'Server links', value: fmt.number(data ? data.server_connected : 0), icon: 'i-server', context: 'Devices with a live server path' })}
-            ${ui.metricCard({ label: 'Mesh capable', value: fmt.number(data ? data.mesh_available : 0), icon: 'i-hub', context: 'Peers able to relay for others' })}
-            ${ui.metricCard({ label: 'Wi-Fi Direct', value: fmt.number(data ? data.wifi_direct_connected : 0), icon: 'i-transfer', context: 'Direct peer links' })}
-            ${ui.metricCard({ label: 'Pending transfers', value: fmt.number(data ? data.pending_transfers : 0), icon: 'i-activity', context: 'Files waiting to complete' })}
-            ${ui.metricCard({ label: 'Active calls', value: fmt.number(data ? data.active_calls : 0), icon: 'i-call', context: 'Calls in progress' })}
-          </div>
-          <div class="split-3-2">
-            ${ui.panel({
-              title: 'Transport coverage', subtitle: 'How connected devices currently reach each other',
-              body: overview.ok ? transportBars : ui.errorState(overview.error, 'network'),
-            })}
-            ${ui.panel({
-              title: 'Platforms in use', subtitle: 'Registered devices by platform',
-              body: deviceList.ok
-                ? (platformPoints.length
-                  ? chartCanvas({ type: 'bar', options: { points: platformPoints, color: ui.token('primary', '#1e5bff'), height: 200 } }, 200)
-                  : ui.emptyState({ icon: 'i-devices', title: 'No devices registered', message: 'Platform breakdown appears once devices register.' }))
-                : ui.errorState(deviceList.error, 'network'),
-            })}
+          <div class="tiles216">
+            ${tile('Phones online', reached.length, 'var(--text-primary)')}
+            ${tile('On the server', count('server'), '#4ade80')}
+            ${tile('Wi-Fi Direct', Math.max(count('wifi_direct'), num(data.wifi_direct_connected)), '#fbbf24')}
+            ${tile('Mesh', Math.max(count('mesh'), num(data.mesh_available)), '#b49cff')}
           </div>
           ${ui.panel({
-            title: 'Online devices', subtitle: 'Devices with an active server session',
-            body: deviceList.ok
-              ? ui.table({
-                columns: [{ label: 'Device' }, { label: 'User' }, { label: 'Platform' }],
-                rows: online.map((d) => [
-                  `<div><span class="cell-primary">${emptyText(d.name)}</span><div class="mono subtle">${emptyText(d.id)}</div></div>`,
-                  emptyText(d.username), emptyText(d.platform),
-                ]),
-                emptyTitle: 'No device is online',
-                emptyMessage: 'Devices appear here while they hold an active server session.',
-              })
-              : ui.errorState(deviceList.error, 'network'),
+            title: 'Phones right now',
+            body: reached.length ? ui.table({
+              columns: [{ label: 'Phone' }, { label: 'Owner' }, { label: 'Link now' }, { label: 'Linked with' }],
+              rows: reached.map((n) => {
+                const l = n.blocked ? null : ui.LINKS_216[n.link];
+                const with216 = peers(n.device_id);
+                return [
+                  `<b>${emptyText(n.device_name)}</b>`,
+                  ui.person216({ userId: n.user_id, name: nameOf(n), hasAvatar: n.has_avatar, admin: !!n.admin_role, blocked: n.blocked, size: 28 }),
+                  n.blocked ? ui.pill216('Blocked', 'red') : (l ? ui.pill216(l.label, l.tone) : ui.pill216('Offline', 'grey')),
+                  with216.length ? ui.esc(with216.join(', ')) : '<span class="subtle">\u2014</span>',
+                ];
+              }),
+            }) : '<div class="empty216">No phone is online right now.</div>',
           })}
-          ${ui.panel({
-            title: 'Transport policy reference', subtitle: 'Rules the server applies to client transports',
-            body: policy.ok
-              ? `<pre class="mono" style="white-space:pre-wrap;margin:0;color:var(--text-secondary)">${ui.esc(JSON.stringify(policy.data, null, 2))}</pre>`
-              : ui.errorState(policy.error, 'network'),
-          })}
+          <div class="row gap-sm"><button class="btn btn-sm" data-nav="map">Open map \u203a</button></div>
         </div>`;
     },
   };
@@ -767,235 +779,235 @@ LL.views = {};
   const calls = {
     id: 'calls',
     title: 'Calls',
-    subtitle: 'Call sessions',
+    subtitle: 'Voice calls between phones',
     icon: 'i-call',
-    group: 'Connectivity',
+    group: 'Network',
     async mount(el, ctx) {
       el.innerHTML = ui.skeletonPanel(5);
-      const result = await settle(ctx.api('/api/v1/admin/calls?limit=200'));
+      const [result, map] = await Promise.all([settle(ctx.api('/api/v1/admin/calls?limit=200')), people216(ctx)]);
       const list = result.ok && Array.isArray(result.data.calls) ? result.data.calls : [];
-      const active = list.filter((c) => !c.ended_at);
+      const state216 = (c) => {
+        if (!c.ended_at) return ui.pill216('Live', 'blue');
+        if (num(c.duration_seconds) > 0) return ui.pill216('Done', 'green');
+        const r = String(c.end_reason || '').toLowerCase();
+        if (r.indexOf('declin') >= 0 || r.indexOf('reject') >= 0) return ui.pill216('Declined', 'grey');
+        return ui.pill216('Missed', 'orange');
+      };
       el.innerHTML = `
         <div class="section">
-          ${ui.sectionHead({
-            title: 'Calls', subtitle: 'Every call the server brokered, newest first', icon: 'i-call',
-            actions: `${ui.badge(`${list.length} recorded`, 'neutral')}${ui.badge(`${active.length} in progress`, active.length ? 'info' : 'neutral', { dot: true })}`,
-          })}
           ${ui.panel({
             pad0: true,
-            body: `<div style="padding:16px">${!result.ok
-              ? ui.errorState(result.error, 'calls')
-              : ui.table({
-                columns: [
-                  { label: 'Started' }, { label: 'Caller' }, { label: 'Callee' }, { label: 'State' },
-                  { label: 'Duration' }, { label: 'Transport' },
-                ],
-                rows: list.map((c) => {
-                  const started = c.started_at ? new Date(c.started_at) : null;
-                  const ended = c.ended_at ? new Date(c.ended_at) : null;
-                  const seconds = started && ended ? (ended - started) / 1000 : null;
-                  return [
-                    `<span class="subtle">${ui.esc(fmt.dateTime(c.started_at))}</span>`,
-                    emptyText(c.caller || c.caller_id),
-                    emptyText(c.callee || c.callee_id),
-                    c.ended_at ? ui.badge('ended', 'neutral', { dot: true }) : ui.badge('in progress', 'info', { dot: true }),
-                    seconds === null ? '<span class="subtle">—</span>' : ui.esc(fmt.duration(seconds)),
-                    emptyText(c.transport || c.mode),
-                  ];
-                }),
-                emptyTitle: 'No calls recorded',
-                emptyMessage: 'Calls appear here once the server brokers them.',
-              })}</div>`,
+            body: !result.ok ? `<div style="padding:16px">${ui.errorState(result.error, 'calls')}</div>`
+              : (list.length ? `<div style="padding:0 4px">${ui.table({
+                columns: [{ label: 'Call' }, { label: 'Type' }, { label: 'Length' }, { label: 'When' }, { label: '' }],
+                rows: list.map((c) => [
+                  who216(map, c.caller_user_id, c.caller_name || c.caller_id, `to ${c.callee_name || c.callee_id || ''}`, { size: 28 }),
+                  'Voice',
+                  num(c.duration_seconds) > 0 ? ui.esc(fmt.duration(num(c.duration_seconds))) : '<span class="subtle">\u2014</span>',
+                  `<span>${ui.esc(ui.when216(c.started_at) === 'Online now' ? 'Just now' : ui.when216(c.started_at))}</span>`,
+                  state216(c),
+                ]),
+              })}</div>` : '<div class="empty216">No calls yet.</div>'),
           })}
         </div>`;
     },
   };
 
   // ------------------------------------------------------------------ transfers
+  const KIND_216 = { photo: 'Photo', video: 'Video', voice: 'Voice note', document: 'Document' };
   const transfers = {
     id: 'transfers',
-    title: 'File Transfers',
-    subtitle: 'Transfers and quota',
+    title: 'File transfers',
+    subtitle: 'Files sent through the server (never the file names)',
     icon: 'i-transfer',
-    group: 'Connectivity',
+    group: 'Network',
     async mount(el, ctx) {
       el.innerHTML = ui.skeletonPanel(5);
-      const result = await settle(ctx.api('/api/v1/admin/transfers?limit=200'));
+      const [result, summary, map] = await Promise.all([
+        settle(ctx.api('/api/v1/admin/transfers?limit=200')),
+        settle(ctx.api('/api/v1/admin/summary')),
+        people216(ctx),
+      ]);
       const list = result.ok && Array.isArray(result.data.transfers) ? result.data.transfers : [];
-      const pending = list.filter((t) => String(t.status || '').toLowerCase() !== 'complete');
+      const used = summary.ok ? fmt.bytes(num(summary.data.file_storage_bytes)) : '';
       el.innerHTML = `
         <div class="section">
-          ${ui.sectionHead({
-            title: 'File transfers', subtitle: 'Transfer records and completion state', icon: 'i-transfer',
-            actions: `${ui.badge(`${list.length} records`, 'neutral')}${ui.badge(`${pending.length} pending`, pending.length ? 'warning' : 'neutral')}`,
-          })}
           ${ui.panel({
             pad0: true,
-            body: `<div style="padding:16px">${!result.ok
-              ? ui.errorState(result.error, 'transfers')
-              : ui.table({
-                columns: [
-                  { label: 'Created' }, { label: 'File' }, { label: 'Size', numeric: true },
-                  { label: 'From' }, { label: 'To' }, { label: 'Status' },
-                ],
+            body: !result.ok ? `<div style="padding:16px">${ui.errorState(result.error, 'transfers')}</div>`
+              : (list.length ? `<div style="padding:0 4px">${ui.table({
+                columns: [{ label: 'Kind' }, { label: 'Sent by' }, { label: 'Size', numeric: true }, { label: 'When' }, { label: '' }],
                 rows: list.map((t) => [
-                  `<span class="subtle">${ui.esc(fmt.dateTime(t.created_at))}</span>`,
-                  emptyText(t.filename || t.name),
-                  ui.esc(fmt.bytes(t.size_bytes || t.bytes)),
-                  emptyText(t.sender || t.from_device),
-                  emptyText(t.recipient || t.to_device),
-                  ui.statusBadge(t.status),
+                  `<b>${ui.esc(KIND_216[t.kind] || 'Document')}</b>`,
+                  t.owner_user_id ? who216(map, t.owner_user_id, t.owner_name, '', { size: 28 }) : emptyText(t.owner_name),
+                  ui.esc(fmt.bytes(num(t.size))),
+                  `<span>${ui.esc(fmt.dateTime(t.created_at))}</span>`,
+                  String(t.status || '').toLowerCase() === 'complete' ? ui.pill216('Sent', 'green') : ui.pill216(fmt.titleCase(t.status || 'waiting'), 'grey'),
                 ]),
-                emptyTitle: 'No transfers recorded',
-                emptyMessage: 'Transfers appear here as devices exchange files.',
-              })}</div>`,
+              })}</div>` : '<div class="empty216">No files yet.</div>'),
           })}
+          ${used ? `<div class="type-caption">${ui.esc(used)} used</div>` : ''}
         </div>`;
     },
   };
 
   // ------------------------------------------------------------------- security
+  // Page 20 words: one line per warning, grouped wrong passwords.
+  function securityRows216(events, threshold) {
+    const out = [];
+    const failed = {};
+    events.forEach((e) => {
+      const who = e.username ? '@' + e.username : (e.display_name || '');
+      const when = fmt.dateTime(e.created_at);
+      const phone = e.device_name ? ` \u00b7 ${e.device_name}` : '';
+      const a = String(e.action || '');
+      if (a === 'login_failed') {
+        const key = `${e.user_id}|${String(e.created_at || '').slice(0, 10)}`;
+        if (!failed[key]) { failed[key] = { n: 0, who, when, at: e.created_at }; out.push(failed[key]); }
+        failed[key].n += 1;
+        return;
+      }
+      let title = fmt.titleCase(a.replace(/_/g, ' '));
+      let tag = ['Info', 'grey'];
+      if (a === 'device_revoked') { title = 'Phone removed'; tag = ['Small', 'orange']; }
+      else if (a === 'session_revoked' || a === 'admin_session_revoked') { title = 'Signed out by admin'; tag = ['Small', 'orange']; }
+      else if (a === 'admin_user_status_changed') {
+        const back = String(e.detail || '').indexOf('active') >= 0;
+        title = back ? 'Account turned on again' : 'Account stopped';
+        tag = back ? ['Done', 'green'] : ['Small', 'orange'];
+      } else if (a === 'rotate_identity_key') title = 'New security key';
+      else if (a === 'recovery_code_disable') { title = 'Recovery code turned off'; tag = ['Small', 'orange']; }
+      else if (a === 'recovery_code_rotate') title = 'New recovery code';
+      else if (a === 'login_success') title = 'Signed in';
+      else if (a.indexOf('account_recovery_') === 0) {
+        const step = a.slice('account_recovery_'.length);
+        title = 'Recovery ' + ({ requested: 'asked', approved: 'approved', completed: 'finished', reissued: 'new code' }[step] || step.replace(/_/g, ' '));
+      } else if (a.indexOf('account_transfer_') === 0) title = 'Moved to a new phone';
+      out.push({ title, sub: `${who}${phone} \u00b7 ${when}`, tag });
+    });
+    return out.map((r) => {
+      if (r.n === undefined) return r;
+      const serious = r.n >= Math.max(1, threshold);
+      return { title: `${r.n} wrong password${r.n === 1 ? '' : 's'}`, sub: `${r.who} \u00b7 ${r.when}`, tag: serious ? ['Serious', 'red'] : ['Small', 'orange'] };
+    });
+  }
+
   const security = {
     id: 'security',
-    title: 'Security Center',
-    subtitle: 'Alerts and policy',
+    title: 'Security',
+    subtitle: 'Wrong passwords and other warnings',
     icon: 'i-shield',
-    group: 'Trust & Compliance',
+    group: 'Safety',
     async mount(el, ctx) {
       el.innerHTML = ui.skeletonPanel(6);
-      const [summary, events] = await Promise.all([
+      const [summary, events, settings] = await Promise.all([
         settle(ctx.api('/api/v1/admin/security-summary')),
         settle(ctx.api('/api/v1/admin/security-events?limit=200')),
+        settle(ctx.api('/api/v1/admin/settings')),
       ]);
-
       const counts = summary.ok ? summary.data.counts || {} : {};
-      const recent = summary.ok && Array.isArray(summary.data.recent_events) ? summary.data.recent_events : [];
-      const adminActions = summary.ok && Array.isArray(summary.data.recent_admin_actions) ? summary.data.recent_admin_actions : [];
-      const eventList = events.ok && Array.isArray(events.data.security_events) ? events.data.security_events : [];
-      const critical = num(counts.critical_alerts_24h);
-      const failed = num(counts.failed_logins_24h);
-
-      const head = critical > 0
-        ? ui.headline('danger', `${critical} critical alert${critical === 1 ? '' : 's'} in the last 24 hours`, 'i-alert')
-        : (failed > 0
-          ? ui.headline('warning', `${failed} failed sign-in attempt${failed === 1 ? '' : 's'} in the last 24 hours`, 'i-alert')
-          : ui.headline('success', 'No critical security alerts in the last 24 hours', 'i-check'));
-
+      const threshold = settings.ok ? num(settings.data.security_alert_threshold) || 1 : 1;
+      const list = events.ok && Array.isArray(events.data.security_events) ? events.data.security_events : [];
+      const weekAgo = Date.now() - 7 * 86400000;
+      const rows = securityRows216(list.filter((e) => new Date(e.created_at).getTime() >= weekAgo), threshold);
+      const serious = rows.filter((r) => r.tag[0] === 'Serious').length;
+      const small = rows.filter((r) => r.tag[0] === 'Small').length;
       el.innerHTML = `
         <div class="section">
-          ${ui.sectionHead({ title: 'Security center', subtitle: 'Audited security events, account protection and administrator activity', icon: 'i-shield' })}
-          ${head}
-          <div class="grid grid-metrics">
-            ${ui.metricCard({ label: 'Critical alerts 24h', value: fmt.number(counts.critical_alerts_24h), icon: 'i-alert', accent: critical ? 'danger' : 'success', context: 'Revocations and lockouts' })}
-            ${ui.metricCard({ label: 'Failed logins 24h', value: fmt.number(counts.failed_logins_24h), icon: 'i-lock', accent: failed ? 'warning' : 'success', context: 'Rejected sign-in attempts' })}
-            ${ui.metricCard({ label: 'Locked users', value: fmt.number(counts.locked_users), icon: 'i-ban', context: 'Accounts under lockout' })}
-            ${ui.metricCard({ label: 'Users with failures', value: fmt.number(counts.users_with_failures), icon: 'i-users', context: 'Accounts with at least one failure' })}
-            ${ui.metricCard({ label: 'Revoked devices', value: fmt.number(counts.revoked_devices), icon: 'i-devices', context: 'Devices no longer trusted' })}
-            ${ui.metricCard({ label: 'Active sessions', value: fmt.number(counts.active_sessions), icon: 'i-key', context: 'Authenticated device sessions' })}
-            ${ui.metricCard({ label: 'Admin sessions', value: fmt.number(counts.admin_sessions), icon: 'i-shield', context: 'Signed-in administrators' })}
-            ${ui.metricCard({ label: 'Pending recoveries', value: fmt.number(counts.pending_recoveries), icon: 'i-restore', context: 'Recovery requests awaiting review' })}
-          </div>
-          <div class="split-3-2">
-            ${ui.panel({
-              title: 'Security events', subtitle: 'Newest first, straight from the security audit table',
-              body: events.ok
-                ? ui.table({
-                  columns: [{ label: 'Time' }, { label: 'Action' }, { label: 'Severity' }, { label: 'User' }, { label: 'Device' }, { label: 'Detail' }],
-                  rows: eventList.map((e) => [
-                    `<span class="subtle nowrap">${ui.esc(fmt.dateTime(e.created_at))}</span>`,
-                    `<span class="cell-primary">${ui.esc(fmt.titleCase(e.action))}</span>`,
-                    ui.severityBadge(e.severity),
-                    `<span class="mono subtle">${emptyText(e.user_id)}</span>`,
-                    `<span class="mono subtle">${emptyText(e.device_id)}</span>`,
-                    emptyText(e.detail),
-                  ]),
-                  emptyTitle: 'No security events',
-                  emptyMessage: 'The security audit table has no rows yet.',
-                })
-                : ui.errorState(events.error, 'security'),
-            })}
-            ${ui.panel({
-              title: 'Recent administrator activity', subtitle: 'Administrative actions recorded in the audit trail',
-              body: summary.ok
-                ? ui.timeline(adminActions.map((a) => ({
-                  title: fmt.titleCase(a.action), detail: a.detail, timestamp: a.created_at,
-                  severity: a.severity, icon: 'i-audit',
-                })), { max: 10, emptyMessage: 'No administrator action has been recorded yet.' })
-                : ui.errorState(summary.error, 'security'),
-            })}
+          <div class="tiles216" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+            <div class="tile216"><small>Serious</small><b style="color:#f87171">${fmt.number(serious)}</b></div>
+            <div class="tile216"><small>Small</small><b style="color:#fbbf24">${fmt.number(small)}</b></div>
+            <div class="tile216"><small>Locked</small><b>${fmt.number(counts.locked_users)}</b></div>
           </div>
           ${ui.panel({
-            title: 'Latest security events', subtitle: 'Condensed feed of the eight most recent entries',
-            body: summary.ok
-              ? (recent.length
-                ? `<div style="display:grid;gap:8px">${recent.slice(0, 8).map((e) => ui.notificationItem({
-                  icon: ui.severityIcon(e.severity), title: fmt.titleCase(e.action), detail: e.detail,
-                  timestamp: e.created_at, severity: e.severity,
-                })).join('')}</div>`
-                : ui.emptyState({ icon: 'i-shield', title: 'Nothing recorded', message: 'No security event has been recorded yet.' }))
-              : ui.errorState(summary.error, 'security'),
+            title: 'This week',
+            body: !events.ok ? ui.errorState(events.error, 'security')
+              : (rows.length ? rows.map((r) => `<div class="map216-row" style="min-height:64px;border-bottom:1px solid var(--border)">
+                  <div class="p216-t"><b>${ui.esc(r.title)}</b><small>${ui.esc(r.sub)}</small></div>${ui.pill216(r.tag[0], r.tag[1])}</div>`).join('')
+                : '<div class="empty216"><b>No warnings</b><br>Wrong passwords and other warnings show here.</div>'),
           })}
         </div>`;
     },
   };
 
   // ---------------------------------------------------------------------- audit
+  // Page 21 sentences, names from the server (216h).
+  function auditSentence216(e) {
+    const admin = e.admin_name || 'An admin';
+    const target = e.target_name || 'someone';
+    const a = String(e.action || '');
+    const d = String(e.detail || '');
+    const level = (d.match(/role=([a-z]+)/) || [])[1];
+    if (a === 'admin_block_block') return [`${admin} blocked ${target}`, 'red', 'blocks'];
+    if (a === 'admin_block_unblock') return [`${admin} unblocked ${target}`, 'green', 'blocks'];
+    if (a === 'version_rule') return [`${admin} set minimum version ${(d.match(/min_version=([^ ]+)/) || [])[1] || ''}`.trim(), 'purple', 'admins'];
+    if (a.indexOf('user_admin') === 0 || a === 'admin_offline_cert') {
+      if (a.indexOf('remove') >= 0) return [`${admin} removed admin from ${target}`, 'gold', 'admins'];
+      return [`${admin} made ${target} an admin${level ? ` (${ui.LEVELS_216[level] || level})` : ''}`, 'gold', 'admins'];
+    }
+    if (a.indexOf('recovery') >= 0) {
+      const verb = a.indexOf('reject') >= 0 ? 'rejected' : (a.indexOf('reissue') >= 0 ? 'made a new code for' : 'approved');
+      return [`${admin} ${verb} recovery for ${target}`, 'orange', 'recovery'];
+    }
+    if (a === 'admin_conversation_viewed') return [`${admin} opened chat ${target}`, 'grey', ''];
+    if (a === 'rename_device') return [`${admin} renamed ${target}`, 'grey', ''];
+    if (a === 'revoke_device') return [`${admin} removed ${target}`, 'grey', ''];
+    if (a === 'revoke_session') return [`${admin} signed out ${target}`, 'grey', ''];
+    if (a === 'set_user_status') {
+      const st = (d.match(/status=([a-z]+)/) || [])[1];
+      return [`${admin} set ${target} to ${(STATUS_216[st] || [fmt.titleCase(st || 'new status')])[0]}`, 'grey', ''];
+    }
+    if (/^update_.*network_policy$/.test(a)) return [`${admin} changed the Wi-Fi rule of ${target}`, 'teal', ''];
+    if (a === 'update_admin_settings') return [`${admin} changed admin settings`, 'grey', ''];
+    if (a === 'backup_database') return [`${admin} made a backup`, 'grey', ''];
+    if (a === 'admin_login') return [`${admin} signed in`, 'grey', ''];
+    if (a === 'admin_logout' || a === 'logout') return [`${admin} signed out`, 'grey', ''];
+    if (a === 'admin_permission_denied') return [`${admin} was stopped (no right)`, 'red', ''];
+    const subject = e.admin_name || (e.admin_id ? admin : (e.target_name || 'Someone'));
+    return [`${subject} · ${a.replace(/_/g, ' ')}`, 'grey', ''];
+  }
+
   const audit = {
     id: 'audit',
-    title: 'Audit Log',
-    subtitle: 'Admin actions',
+    title: 'Audit log',
+    subtitle: 'Everything admins did, newest first',
     icon: 'i-audit',
-    group: 'Trust & Compliance',
+    group: 'Safety',
     async mount(el, ctx) {
       const query = ctx.state.filters.audit || { search: '' };
+      const kind = query.kind || '';
       el.innerHTML = ui.skeletonPanel(6);
       const result = await settle(ctx.api('/api/v1/admin/logs?limit=200'));
       const list = result.ok && Array.isArray(result.data.logs) ? result.data.logs : [];
-      const search = (query.search || '').toLowerCase();
-      const filtered = list.filter((entry) => {
-        if (!search) return true;
-        const haystack = `${entry.action || ''} ${entry.admin_id || ''} ${entry.target_id || ''} ${entry.detail || ''}`.toLowerCase();
-        return haystack.indexOf(search) >= 0;
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const yesterday = new Date(today.getTime() - 86400000);
+      const groups = { Today: [], Yesterday: [], Earlier: [] };
+      list.forEach((e) => {
+        const s = auditSentence216(e);
+        if (kind && s[2] !== kind) return;
+        const t = new Date(e.created_at);
+        const g = t >= today ? 'Today' : (t >= yesterday ? 'Yesterday' : 'Earlier');
+        groups[g].push({ s, e });
       });
-
-      const actionCounts = {};
-      list.forEach((entry) => { const key = entry.action || 'unknown'; actionCounts[key] = (actionCounts[key] || 0) + 1; });
-      const topActions = Object.keys(actionCounts)
-        .map((k) => ({ label: fmt.titleCase(k), value: actionCounts[k] }))
-        .sort((a, b) => b.value - a.value)
-        .slice(0, 6);
-
+      const body = Object.keys(groups).filter((g) => groups[g].length).map((g) => `
+        <div style="font-size:11.5px;font-weight:600;color:var(--text-tertiary);margin:10px 0 4px">${g}</div>
+        ${groups[g].map(({ s, e }) => {
+          const tone = ui.TONES_216[s[1]] || ui.TONES_216.grey;
+          return `<div class="map216-row" style="justify-content:flex-start;gap:12px">
+            <span style="width:10px;height:10px;border-radius:50%;background:${tone[1]};flex:0 0 10px"></span>
+            <div class="p216-t"><b>${ui.esc(s[0])}</b><small>${ui.esc(fmt.dateTime(e.created_at))}${s[2] === 'blocks' ? ' \u00b7 every phone' : ''}</small></div></div>`;
+        }).join('')}`).join('');
       el.innerHTML = `
         <div class="section">
-          ${ui.sectionHead({
-            title: 'Audit log', subtitle: 'Every administrative action, newest first', icon: 'i-audit',
-            actions: ui.badge(`${list.length} entries`, 'neutral'),
-          })}
-          ${topActions.length ? ui.panel({
-            title: 'Most frequent actions', subtitle: 'Based on the entries currently loaded',
-            body: chartCanvas({ type: 'bar', options: { points: topActions, color: ui.token('primary', '#1e5bff'), height: 180 } }, 180),
-          }) : ''}
-          ${ui.panel({
-            pad0: true,
-            body: `<div style="padding:16px 16px 0">${ui.filterBar({
-              search: true, searchPlaceholder: 'Search action, admin, target…', searchValue: query.search || '',
-            })}</div>
-            <div style="padding:16px">${!result.ok
-              ? ui.errorState(result.error, 'audit')
-              : ui.table({
-                columns: [{ label: 'Time' }, { label: 'Administrator' }, { label: 'Action' }, { label: 'Target' }, { label: 'Detail' }],
-                rows: filtered.map((entry) => [
-                  `<span class="subtle nowrap">${ui.esc(fmt.dateTime(entry.created_at))}</span>`,
-                  `<span class="mono">${emptyText(entry.admin_id)}</span>`,
-                  `<span class="cell-primary">${ui.esc(fmt.titleCase(entry.action))}</span>`,
-                  `<span class="mono subtle">${emptyText(entry.target_id)}</span>`,
-                  emptyText(entry.detail),
-                ]),
-                emptyTitle: 'No audit entries match',
-                emptyMessage: 'Clear the search to see every recorded action.',
-              })}</div>`,
-          })}
+          <div class="bar216">${ui.chips216([
+            { value: '', label: 'All' }, { value: 'blocks', label: 'Blocks' }, { value: 'admins', label: 'Admins' }, { value: 'recovery', label: 'Recovery' },
+          ], kind, 'data-audit-chip')}</div>
+          ${ui.panel({ body: !result.ok ? ui.errorState(result.error, 'audit') : (body || '<div class="empty216">Nothing yet</div>') })}
         </div>`;
+      el.querySelectorAll('[data-audit-chip]').forEach((b) => b.addEventListener('click', () => {
+        ctx.state.filters.audit = Object.assign({}, query, { kind: b.getAttribute('data-audit-chip') });
+        ctx.refresh();
+      }));
     },
   };
 
@@ -1003,51 +1015,200 @@ LL.views = {};
   const recovery = {
     id: 'recovery',
     title: 'Recovery',
-    subtitle: 'Account recovery queue',
+    subtitle: 'People who lost their phone and asked to get back in',
     icon: 'i-restore',
-    group: 'Trust & Compliance',
+    group: 'Safety',
     async mount(el, ctx) {
       el.innerHTML = ui.skeletonPanel(5);
-      const result = await settle(ctx.api('/api/v1/admin/recovery-requests?limit=200'));
+      const [result, map] = await Promise.all([settle(ctx.api('/api/v1/admin/recovery-requests?limit=200')), people216(ctx)]);
       const list = result.ok && Array.isArray(result.data.requests || result.data.recovery_requests)
-        ? (result.data.requests || result.data.recovery_requests)
-        : [];
+        ? (result.data.requests || result.data.recovery_requests) : [];
       const pending = list.filter((r) => String(r.status || '').toLowerCase() === 'pending');
-
+      const earlier = list.filter((r) => String(r.status || '').toLowerCase() !== 'pending');
+      const can = ctx.can('manageRecovery');
+      const card = (r) => ui.panel({
+        body: `<div class="map216-row">${who216(map, r.user_id, r.display_name || r.username, `@${r.username || ''} \u00b7 new phone: ${r.target_device_name || '\u2014'}`, { size: 40 })}
+            ${ui.pill216('Waiting', 'orange')}</div>
+          <div class="type-caption" style="margin:6px 0 10px">Asked ${ui.esc(fmt.dateTime(r.created_at))} \u00b7 ends ${ui.esc(fmt.dateTime(r.expires_at))}</div>
+          ${can ? `<textarea class="input" data-reason-for="${ui.esc(r.id)}" rows="2" maxlength="200" placeholder="Reason (only if you reject)" style="width:100%;height:auto;padding:8px"></textarea>
+          <div class="row gap-sm" style="margin-top:10px">
+            <button class="btn btn-primary" data-recovery="approve" data-id="${ui.esc(r.id)}">Approve</button>
+            <button class="btn" data-recovery="reissue" data-id="${ui.esc(r.id)}">New code</button>
+            <button class="btn btn-danger" data-recovery="reject" data-id="${ui.esc(r.id)}">Reject</button>
+          </div>` : '<div class="type-caption">Your admin level can only look.</div>'}`,
+      });
+      const tone = { approved: ['Approved', 'green'], rejected: ['Rejected', 'red'], completed: ['Finished', 'green'], expired: ['Ended', 'grey'] };
       el.innerHTML = `
         <div class="section">
-          ${ui.sectionHead({
-            title: 'Recovery queue', subtitle: 'Account recovery requests and their review state', icon: 'i-restore',
-            actions: `${ui.badge(`${pending.length} pending`, pending.length ? 'warning' : 'neutral')}${ui.badge(`${list.length} total`, 'neutral')}`,
-          })}
-          ${ui.panel({
-            pad0: true,
-            body: `<div style="padding:16px">${!result.ok
-              ? ui.errorState(result.error, 'recovery')
-              : ui.table({
-                columns: [{ label: 'Requested' }, { label: 'User' }, { label: 'Device' }, { label: 'Reason' }, { label: 'State' }, { label: 'Actions' }],
-                rows: list.map((r) => [
-                  `<span class="subtle nowrap">${ui.esc(fmt.dateTime(r.created_at || r.requested_at))}</span>`,
-                  `<span class="cell-primary">${emptyText(r.username || r.user_id)}</span>`,
-                  emptyText(r.device_name || r.device_id),
-                  emptyText(r.reason),
-                  ui.statusBadge(r.status),
-                  tableActions([
-                    ctx.can('manageRecovery') && String(r.status || '').toLowerCase() === 'pending'
-                      ? `<button class="btn btn-sm btn-primary" data-recovery="approve" data-id="${ui.esc(r.id)}">Approve</button>
-                         <button class="btn btn-sm" data-recovery="reissue" data-id="${ui.esc(r.id)}">Reissue</button>
-                         <button class="btn btn-sm btn-danger" data-recovery="reject" data-id="${ui.esc(r.id)}">Reject</button>`
-                      : '<span class="subtle">—</span>',
-                  ]),
-                ]),
-                emptyTitle: 'No recovery requests',
-                emptyMessage: 'Requests appear here when a user starts account recovery.',
-              })}</div>`,
-          })}
-          ${ui.note('Recovery approvals are audited',
-            'Approving, reissuing or rejecting a recovery request writes an entry to the security audit trail and is visible in the audit log.',
-            'i-shield')}
+          ${!result.ok ? ui.panel({ body: ui.errorState(result.error, 'recovery') }) : ''}
+          ${pending.map(card).join('')}
+          ${result.ok && !pending.length ? ui.panel({ body: '<div class="empty216"><b>No one is waiting</b><br>Requests show here when someone starts recovery on a new phone.</div>' }) : ''}
+          ${earlier.length ? ui.panel({
+            title: 'Earlier',
+            body: ui.table({
+              columns: [{ label: 'Person' }, { label: 'New phone' }, { label: 'When' }, { label: '' }],
+              rows: earlier.map((r) => {
+                const t = tone[String(r.status || '').toLowerCase()] || [fmt.titleCase(r.status || ''), 'grey'];
+                return [who216(map, r.user_id, r.display_name || r.username, '@' + (r.username || ''), { size: 28 }),
+                  emptyText(r.target_device_name), `<span>${ui.esc(fmt.dateTime(r.created_at))}</span>`, ui.pill216(t[0], t[1])];
+              }),
+            }),
+          }) : ''}
         </div>`;
+    },
+  };
+
+  // ------------------------------------------------------------------------ map
+  // W3: who is linked to whom, live. One node per phone (photo + name), lines
+  // from what phones report (216g) plus their server link (216h link-map).
+  const mapView = { x: 0, y: 0, k: 1, filter: 'all', pick: '' };
+
+  function layout216(nodes, edges) {
+    const W = 1000; const H = 700;
+    const pos = { server: { x: W / 2, y: 110, fixed: true } };
+    const online = nodes.filter((n) => n.online);
+    const offline = nodes.filter((n) => !n.online);
+    online.forEach((n, i) => {
+      const a = Math.PI * (0.15 + 0.7 * ((i + 0.5) / Math.max(1, online.length)));
+      pos[n.device_id] = { x: W / 2 - Math.cos(a) * 330, y: 110 + Math.sin(a) * 300 };
+    });
+    offline.forEach((n, i) => {
+      pos[n.device_id] = { x: 120 + ((i + 0.5) / Math.max(1, offline.length)) * (W - 240), y: H - 90 };
+    });
+    // A few relaxation steps keep linked phones near each other without overlap.
+    const ids = nodes.map((n) => n.device_id);
+    for (let step = 0; step < 120; step += 1) {
+      ids.forEach((a) => ids.forEach((b) => {
+        if (a >= b) return;
+        const p = pos[a]; const q = pos[b];
+        const dx = q.x - p.x; const dy = q.y - p.y; const d = Math.max(1, Math.hypot(dx, dy));
+        if (d < 120) { const f = (120 - d) / 2 / d; p.x -= dx * f; p.y -= dy * f; q.x += dx * f; q.y += dy * f; }
+      }));
+      edges.forEach((e) => {
+        if (e.from === 'server' || !pos[e.from] || !pos[e.to]) return;
+        const p = pos[e.from]; const q = pos[e.to];
+        const dx = q.x - p.x; const dy = q.y - p.y; const d = Math.max(1, Math.hypot(dx, dy));
+        if (d > 200) { const f = (d - 200) * 0.02 / d; p.x += dx * f; p.y += dy * f; q.x -= dx * f; q.y -= dy * f; }
+      });
+      ids.forEach((id) => { const p = pos[id]; p.x = Math.min(W - 60, Math.max(60, p.x)); p.y = Math.min(H - 70, Math.max(190, p.y)); });
+    }
+    return pos;
+  }
+
+  const map = {
+    id: 'map',
+    title: 'Map',
+    subtitle: 'Who is linked to whom, live',
+    icon: 'i-hub',
+    group: 'Network',
+    isNew: true,
+    async refresh(el, ctx) { await this.mount(el, ctx, true); return true; },
+    async mount(el, ctx, quiet) {
+      if (!quiet) el.innerHTML = ui.skeletonPanel(6);
+      const result = await settle(ctx.api('/api/v1/admin/link-map'));
+      if (!result.ok) { el.innerHTML = ui.panel({ title: 'Map', body: ui.errorState(result.error, 'map') }); return; }
+      const nodes = Array.isArray(result.data.nodes) ? result.data.nodes : [];
+      const edges = Array.isArray(result.data.edges) ? result.data.edges : [];
+      const linkOf = (n) => (n.blocked ? 'blocked' : (n.link || 'offline'));
+      const count = (k) => nodes.filter((n) => linkOf(n) === k).length;
+      const chips = [{ value: 'all', label: `All ${nodes.length}` }];
+      [['server', 'Server'], ['wifi_direct', 'Wi-Fi Direct'], ['mesh', 'Mesh'], ['lan', 'Local Wi-Fi'], ['blocked', 'Blocked']].forEach(([k, label]) => {
+        const c = count(k);
+        if (c || k === 'server') chips.push({ value: k, label: `${label} ${c}` });
+      });
+      const pos = layout216(nodes, edges);
+      const shown = (n) => mapView.filter === 'all' || linkOf(n) === mapView.filter;
+      const lines = edges.map((e) => {
+        const p = pos[e.from]; const q = pos[e.to];
+        if (!p || !q) return '';
+        const to = nodes.find((n) => n.device_id === e.to) || {};
+        const from = nodes.find((n) => n.device_id === e.from) || {};
+        const blocked = to.blocked || from.blocked;
+        const color = blocked ? '#8b949e' : ((ui.LINKS_216[e.link] || ui.LINKS_216.server).color);
+        return `<line x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" stroke="${color}" stroke-width="2" ${blocked ? 'stroke-dasharray="9 9"' : ''} opacity="${(mapView.filter === 'all' || (shown(to) && (e.from === 'server' || shown(from)))) ? 1 : 0.2}"/>`;
+      }).join('');
+      const people = {};
+      nodes.forEach((n) => { if (n.user_id) people[n.user_id] = true; });
+      const nodeHtml = nodes.map((n) => {
+        const p = pos[n.device_id];
+        const name = n.display_name || n.username || n.device_name || 'Phone';
+        const cls = ['map216-node', shown(n) ? '' : 'dim', mapView.pick && mapView.pick === n.user_id ? 'sel' : ''].join(' ');
+        return `<div class="${cls}" style="left:${p.x}px;top:${p.y}px" data-map-pick="${ui.esc(n.user_id || '')}" title="${ui.esc(n.device_name || '')}">
+          ${ui.avatar216({ userId: n.user_id, name, hasAvatar: n.has_avatar, admin: !!n.admin_role, blocked: n.blocked, size: 48 })}
+          <span class="tag">${ui.esc(name)}</span></div>`;
+      }).join('');
+      const sideList = nodes.filter((n) => !mapView.pick || n.user_id === mapView.pick);
+      const legend = Object.keys(ui.LINKS_216).filter((k) => edges.some((e) => e.link === k))
+        .map((k) => `<span><i style="background:${ui.LINKS_216[k].color}"></i>${ui.esc(ui.LINKS_216[k].label)}</span>`).join('')
+        + (nodes.some((n) => n.blocked) ? '<span><i style="background:#8b949e"></i>Blocked \u00b7 relays only</span>' : '');
+      el.innerHTML = `
+        <div class="section">
+          <div class="bar216">${ui.chips216(chips, mapView.filter, 'data-map-filter')}</div>
+          <div class="map216">
+            <div class="map216-stage" data-map-stage>
+              <div class="map216-world" data-map-world style="transform:translate(${mapView.x}px,${mapView.y}px) scale(${mapView.k})">
+                <svg width="1000" height="700" aria-hidden="true">${lines}</svg>
+                <div class="map216-node" style="left:${pos.server.x}px;top:${pos.server.y}px">
+                  <span class="map216-server">${ui.icon('i-server')}</span><span class="tag" style="background:none">Server</span></div>
+                ${nodeHtml}
+              </div>
+              <div class="map216-zoom"><button data-map-zoom="in" aria-label="Zoom in">+</button><button data-map-zoom="out" aria-label="Zoom out">\u2212</button><button data-map-zoom="centre" aria-label="Centre">\u25ce</button></div>
+              <div class="map216-legend">${legend}</div>
+              ${nodes.length ? '' : '<div class="empty216" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)">No phones yet.</div>'}
+            </div>
+            ${ui.panel({
+              body: `<div class="map216-side"><h2>Phones (${sideList.length})</h2>
+                ${sideList.map((n) => {
+                  const k = linkOf(n);
+                  const pill = k === 'blocked' ? ui.pill216('Blocked', 'red')
+                    : (ui.LINKS_216[k] ? ui.pill216(ui.LINKS_216[k].label, ui.LINKS_216[k].tone) : ui.pill216('Offline', 'grey'));
+                  return `<div class="map216-row">${ui.person216({ userId: n.user_id, name: n.display_name || n.username || n.device_name, sub: n.device_name, hasAvatar: n.has_avatar, admin: !!n.admin_role, blocked: n.blocked, size: 30 })}${pill}</div>`;
+                }).join('')}
+                <div class="type-caption" style="margin-top:14px">${mapView.pick ? '<a href="#" data-map-pick="">Show everyone</a>' : 'Click a person to see their phones.'}</div></div>`,
+            })}
+          </div>
+        </div>`;
+
+      const world = el.querySelector('[data-map-world]');
+      const stage = el.querySelector('[data-map-stage]');
+      const apply = () => { world.style.transform = `translate(${mapView.x}px,${mapView.y}px) scale(${mapView.k})`; };
+      const zoomAt = (factor, cx, cy) => {
+        const k = Math.min(3, Math.max(0.4, mapView.k * factor));
+        mapView.x = cx - (cx - mapView.x) * (k / mapView.k);
+        mapView.y = cy - (cy - mapView.y) * (k / mapView.k);
+        mapView.k = k;
+        apply();
+      };
+      let drag = null;
+      stage.addEventListener('pointerdown', (ev) => {
+        if (ev.target.closest('[data-map-pick],[data-map-zoom]')) return;
+        drag = { x: ev.clientX - mapView.x, y: ev.clientY - mapView.y };
+        stage.classList.add('drag');
+        stage.setPointerCapture(ev.pointerId);
+      });
+      stage.addEventListener('pointermove', (ev) => { if (drag) { mapView.x = ev.clientX - drag.x; mapView.y = ev.clientY - drag.y; apply(); } });
+      stage.addEventListener('pointerup', () => { drag = null; stage.classList.remove('drag'); });
+      stage.addEventListener('wheel', (ev) => {
+        ev.preventDefault();
+        const r = stage.getBoundingClientRect();
+        zoomAt(ev.deltaY < 0 ? 1.12 : 1 / 1.12, ev.clientX - r.left, ev.clientY - r.top);
+      }, { passive: false });
+      el.querySelectorAll('[data-map-zoom]').forEach((b) => b.addEventListener('click', () => {
+        const r = stage.getBoundingClientRect();
+        const z = b.getAttribute('data-map-zoom');
+        if (z === 'centre') { mapView.x = 0; mapView.y = 0; mapView.k = Math.min(1, r.width / 1000); apply(); return; }
+        zoomAt(z === 'in' ? 1.25 : 0.8, r.width / 2, r.height / 2);
+      }));
+      el.querySelectorAll('[data-map-filter]').forEach((b) => b.addEventListener('click', () => { mapView.filter = b.getAttribute('data-map-filter'); this.mount(el, ctx, true); }));
+      el.querySelectorAll('[data-map-pick]').forEach((b) => b.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const id = b.getAttribute('data-map-pick');
+        mapView.pick = id && mapView.pick !== id ? id : '';
+        this.mount(el, ctx, true);
+      }));
+      if (!quiet && mapView.k === 1 && stage.clientWidth && stage.clientWidth < 1000) {
+        mapView.k = stage.clientWidth / 1000; apply();
+      }
     },
   };
 
@@ -1055,9 +1216,9 @@ LL.views = {};
   const diagnostics = {
     id: 'diagnostics',
     title: 'Diagnostics',
-    subtitle: 'Live subsystem health',
+    subtitle: 'Server health right now',
     icon: 'i-pulse',
-    group: 'Platform',
+    group: 'System',
     async mount(el, ctx) {
       el.innerHTML = ui.skeletonPanel(6);
       const [health, runtime, integrity, production] = await Promise.all([
@@ -1122,10 +1283,10 @@ LL.views = {};
   // ------------------------------------------------------------------- settings
   const settings = {
     id: 'settings',
-    title: 'Admin Settings',
-    subtitle: 'Server configuration',
+    title: 'Admin settings',
+    subtitle: 'Refresh, alerts, backup and server limits',
     icon: 'i-settings',
-    group: 'Platform',
+    group: 'System',
     roles: ['owner'],
     async mount(el, ctx) {
       el.innerHTML = ui.skeletonPanel(5);
@@ -1135,19 +1296,18 @@ LL.views = {};
 
       el.innerHTML = `
         <div class="section">
-          ${ui.sectionHead({ title: 'Admin settings', subtitle: 'Values the dashboard and alerting read from the server', icon: 'i-settings' })}
           ${ui.panel({
-            title: 'Operational settings', subtitle: 'Changes are stored server-side and audited',
+            title: 'Settings', subtitle: 'Saved on the server and in the audit log',
             body: `<form class="stack gap-lg" data-settings-form style="max-width:520px">
               <div class="field">
-                <label for="setting-refresh">Dashboard refresh interval (seconds)</label>
+                <label for="setting-refresh">Refresh pages every (seconds)</label>
                 <input class="input" id="setting-refresh" name="dashboard_refresh_seconds" type="number" min="5" max="120" value="${ui.esc(data.dashboard_refresh_seconds)}">
-                <span class="type-caption">Clamped to 5–120 seconds in the console.</span>
+                <span class="type-caption">5 to 120 seconds.</span>
               </div>
               <div class="field">
-                <label for="setting-threshold">Security alert threshold</label>
+                <label for="setting-threshold">Wrong passwords before a serious warning</label>
                 <input class="input" id="setting-threshold" name="security_alert_threshold" type="number" min="0" value="${ui.esc(data.security_alert_threshold)}">
-                <span class="type-caption">Alerts raised before the security card escalates.</span>
+                <span class="type-caption">Used by the Security page.</span>
               </div>
               <div class="row gap-md">
                 <button class="btn btn-primary" type="submit">Save settings</button>
@@ -1157,18 +1317,18 @@ LL.views = {};
           })}
           <div class="split-1-1">
             ${ui.panel({
-              title: 'Server posture', subtitle: 'Read-only facts reported by the server',
+              title: 'Server limits', subtitle: 'Set on the server; shown here to read only',
               body: ui.statRow([
-                { label: 'Read-only server config', value: data.read_only_server_config ? 'Yes' : 'No' },
-                { label: 'Backup available', value: data.backup_available ? 'Yes' : 'No' },
-                { label: 'Refresh interval', value: `${ui.esc(data.dashboard_refresh_seconds)}s` },
-                { label: 'Alert threshold', value: ui.esc(data.security_alert_threshold) },
+                { label: 'Biggest file', value: data.max_file_bytes ? ui.esc(fmt.bytes(data.max_file_bytes)) : '—' },
+                { label: 'Space per phone', value: data.device_quota_bytes ? ui.esc(fmt.bytes(data.device_quota_bytes)) : '—' },
+                { label: 'Secure link (TLS)', value: data.tls_enabled ? 'On' : 'Off' },
+                { label: 'Server config', value: data.read_only_server_config ? 'Read only' : 'Can change' },
               ]),
             })}
             ${ui.panel({
-              title: 'Database backup', subtitle: 'Writes a consistent copy of the database on the server',
+              title: 'Database backup', subtitle: 'A full copy of the database, saved on the server',
               body: `<div class="stack gap-md">
-                <p class="type-caption">The backup is created by the server and stored in its backup directory. The action is recorded in the audit trail.</p>
+                <p class="type-caption">${data.last_backup_at ? `Last: ${ui.esc(fmt.dateTime(data.last_backup_at))}${data.last_backup_bytes ? ` · ${ui.esc(fmt.bytes(data.last_backup_bytes))}` : ''}` : 'Last: never'}</p>
                 <div class="row gap-md">
                   <button class="btn" data-action="backup" ${data.backup_available === false ? 'disabled' : ''}>${ui.icon('i-backup')}Create backup</button>
                   <span class="type-caption" data-backup-note></span>
@@ -1184,9 +1344,9 @@ LL.views = {};
   const conversations = {
     id: 'conversations',
     title: 'Conversations',
-    subtitle: 'Message review',
+    subtitle: 'Read chats (Owner only, saved in the audit log)',
     icon: 'i-message',
-    group: 'Trust & Compliance',
+    group: 'Safety',
     // Owner only. Reading what users said to each other is the most sensitive
     // action in this console, so the server refuses every other role and writes
     // an audit entry each time a conversation is opened.
@@ -1565,10 +1725,10 @@ LL.views = {};
   // -------------------------------------------------------------------- privacy
   const privacy = {
     id: 'privacy',
-    title: 'Privacy & Access',
-    subtitle: 'Data boundaries',
+    title: 'Privacy & access',
+    subtitle: 'What admins can and cannot see',
     icon: 'i-privacy',
-    group: 'Platform',
+    group: 'System',
     async mount(el, ctx) {
       el.innerHTML = ui.skeletonPanel(4);
       const result = await settle(ctx.api('/api/v1/admin/privacy'));
@@ -1623,7 +1783,7 @@ LL.views = {};
     title: 'App version',
     subtitle: 'Minimum app version for phones',
     icon: 'i-devices',
-    group: 'Platform',
+    group: 'System',
     roles: ['owner'],
     async mount(el, ctx) {
       el.innerHTML = ui.skeletonPanel(4);
@@ -1667,7 +1827,8 @@ LL.views = {};
     },
   };
 
-  LL.views = { dashboard, users, devices, sessions, network, calls, transfers, security, audit, recovery, diagnostics, settings, privacy, conversations, appversion };
+  // Bundle 216: sidebar order People / Network / Safety / System.
+  LL.views = { dashboard, users, devices, sessions, map, network, calls, transfers, recovery, security, audit, conversations, appversion, diagnostics, settings, privacy };
 
   // Modules that are restricted to specific roles (used by quick actions too).
   LL.moduleRoles = { settings: ['owner'], conversations: ['owner'], appversion: ['owner'] };
