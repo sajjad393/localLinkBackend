@@ -19,7 +19,14 @@ func Open(path string) (*Store, error) {
 			return nil, err
 		}
 	}
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(10000)&_pragma=synchronous(FULL)&_pragma=wal_autocheckpoint(1000)")
+	// Bundle 222: the httpapi tests skip the forced disk flush (Windows
+	// FlushFileBuffers made them pass 10 minutes). Only with BOTH test
+	// switches; the real server (and the store tests) keep FULL.
+	sync := "FULL"
+	if os.Getenv("LOCALLINK_TEST_FAST_DB") == "1" && strings.TrimSpace(os.Getenv("LOCALLINK_ENV")) == "test" {
+		sync = "OFF"
+	}
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(10000)&_pragma=synchronous("+sync+")&_pragma=wal_autocheckpoint(1000)")
 	if err != nil {
 		return nil, err
 	}
@@ -1437,6 +1444,47 @@ func orderedMigrationSpecs() []orderedMigrationSpec {
 				to_day TEXT NOT NULL DEFAULT '',
 				file_id TEXT NOT NULL DEFAULT ''
 			);`)
+			return err
+		},
+	}, {
+		// Bundle 222: recovery kinds (move / no_code / reset_code), offline
+		// accounts the phones saw nearby (web Users "Not on server yet"), and
+		// the stored answers of joins carried by nearby phones (same box twice
+		// -> same answer).
+		Version:     61,
+		Name:        "recovery-kind-offline-seen-join-relay",
+		Checksum:    "locallink-recovery-kind-offline-seen-join-relay-v1",
+		Predecessor: 60,
+		Apply: func(tx *sql.Tx) error {
+			var hasKind int
+			_ = tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('account_recovery_requests') WHERE name='kind'`).Scan(&hasKind)
+			if hasKind == 0 {
+				if _, err := tx.Exec(`ALTER TABLE account_recovery_requests ADD COLUMN kind TEXT NOT NULL DEFAULT 'move'`); err != nil {
+					return err
+				}
+			}
+			_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS seen_offline_accounts (
+				device_id TEXT PRIMARY KEY,
+				username TEXT NOT NULL DEFAULT '',
+				name TEXT NOT NULL DEFAULT '',
+				phone_model TEXT NOT NULL DEFAULT '',
+				seen_by_device TEXT NOT NULL DEFAULT '',
+				link TEXT NOT NULL DEFAULT '',
+				first_seen TEXT NOT NULL,
+				last_seen TEXT NOT NULL,
+				carriers TEXT NOT NULL DEFAULT ''
+			);
+			CREATE INDEX IF NOT EXISTS idx_seen_offline_last ON seen_offline_accounts(last_seen);
+			CREATE TABLE IF NOT EXISTS join_relay_answers (
+				box_id TEXT PRIMARY KEY,
+				device_id TEXT NOT NULL,
+				user_id TEXT NOT NULL DEFAULT '',
+				status TEXT NOT NULL,
+				answer TEXT NOT NULL,
+				carriers INTEGER NOT NULL DEFAULT 1,
+				made_at TEXT NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_join_relay_device ON join_relay_answers(device_id);`)
 			return err
 		},
 	}}

@@ -51,6 +51,8 @@ type WSMessage struct {
 
 	// Bundle 216: phones this phone reaches without the server (link map).
 	Neighbors []Neighbor `json:"neighbors,omitempty"`
+	// Bundle 222: offline accounts this phone saw nearby (old phones don't send it).
+	OfflineSeen []offlineSeen222 `json:"offline_seen,omitempty"`
 }
 
 func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +172,7 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 				// connected. Floor traffic: one ~200B frame per publish cycle.
 				a.broadcastPresence(deviceID, d)
 				a.noteNeighbors216(deviceID, msg.Neighbors)
+				a.noteOfflineSeen222(deviceID, msg.OfflineSeen)
 				continue
 			case "call_invite":
 				if strings.TrimSpace(msg.TransportMode) != "offline_mesh" {

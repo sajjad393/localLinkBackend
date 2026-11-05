@@ -1477,3 +1477,8 @@ td { height: 52px; border-bottom: 1px solid var(--border); }
   .th221 { width: 140px; }
   .vhead221 { flex-wrap: wrap; }
 }
+
+/* Bundle 222: one-time recovery code + not-on-server line */
+.code222 { margin: 12px 0; padding: 14px; border-radius: 10px; background: var(--surface-2, #1b2029); font: 600 22px/1.2 ui-monospace, Menlo, Consolas, monospace; letter-spacing: 2px; text-align: center; word-break: break-all; }
+:root:not([data-theme="dark"]) .code222 { background: #f2f4f7; }
+.nos222 { margin-top: 4px; }

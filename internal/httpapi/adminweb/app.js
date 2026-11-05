@@ -213,6 +213,32 @@
     });
   }
 
+  // Bundle 222: the one-time code the admin gives to the person (in person).
+  function showCode222(code, expiresAt) {
+    return new Promise((resolve) => {
+      const host = $('modal-host');
+      const until = expiresAt ? new Date(expiresAt) : null;
+      host.innerHTML = `<div class="modal-scrim" role="dialog" aria-modal="true">
+        <div class="modal">
+          <h2>One-time code</h2>
+          <p>Give this code to the person yourself (not by chat). They type it with a new password.</p>
+          <div class="code222" data-code222>${ui.esc(code)}</div>
+          <p class="type-caption">${until && !isNaN(until.getTime()) ? 'Works until ' + ui.esc(until.toLocaleString()) + ' \u00b7 ' : ''}Use "New code" if it ends.</p>
+          <div class="modal-actions">
+            <button class="btn" data-modal="copy">Copy</button>
+            <button class="btn btn-primary" data-modal="confirm">Done</button>
+          </div>
+        </div>
+      </div>`;
+      const finish = () => { host.innerHTML = ''; resolve(); };
+      host.querySelector('[data-modal="copy"]').addEventListener('click', () => {
+        try { navigator.clipboard.writeText(code); toast('Code copied'); } catch (_) { /* no clipboard */ }
+      });
+      host.querySelector('[data-modal="confirm"]').addEventListener('click', finish);
+      host.querySelector('[data-modal="confirm"]').focus();
+    });
+  }
+
   // ---------------------------------------------------------------- overlays
   function closeOverlays() {
     $('overlays').innerHTML = '';
@@ -952,8 +978,15 @@
         const box = document.querySelector(`[data-reason-for="${CSS.escape(id || '')}"]`);
         const reason = (box && box.value.trim()) || 'Rejected by administrator';
         const body = action === 'reject' ? { id: id, reason: reason } : { id: id };
-        await post(`/api/v1/admin/recovery-requests/${action}`, body);
-        toast('Recovery request updated');
+        // Bundle 222: the server reads id / reason from the address (the body
+        // alone was refused), and the one-time code is now shown to the admin.
+        const q = `?id=${encodeURIComponent(id || '')}${action === 'reject' ? `&reason=${encodeURIComponent(reason)}` : ''}`;
+        const result = await post(`/api/v1/admin/recovery-requests/${action}${q}`, body);
+        if (result && result.recovery_credential) {
+          await showCode222(result.recovery_credential, result.expires_at);
+        } else {
+          toast('Recovery request updated');
+        }
         mountView('recovery');
       } catch (err) { toast(err.message, 'error'); }
       return;

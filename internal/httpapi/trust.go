@@ -139,7 +139,12 @@ func (a *API) Trust(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pub := key.Public().(ed25519.PublicKey)
-	writeJSON(w, http.StatusOK, map[string]any{"server_key": b64url(pub), "key_id": serverKeyID(pub)})
+	out := map[string]any{"server_key": b64url(pub), "key_id": serverKeyID(pub)}
+	// Bundle 222: the server box key for join boxes, signed (phones hand it on).
+	if note, joinKey, err := a.joinNote222(); err == nil {
+		out["join_key"], out["join_note"] = joinKey, note
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // AdminOfflineCert signs this phone's signing key for the signed-in owner.

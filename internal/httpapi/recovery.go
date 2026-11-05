@@ -60,10 +60,15 @@ func (a *API) CreateAccountRecovery(w http.ResponseWriter, r *http.Request) {
 		DeviceName        string `json:"device_name"`
 		Platform          string `json:"platform"`
 		IdentityPublicKey string `json:"identity_public_key"`
+		// Bundle 222: "I don't have my recovery code" -> username only, the admin decides.
+		NoCode bool `json:"no_code"`
 	}
 	if err := decodeJSON(r, &in, 12<<10); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	if in.NoCode {
+		in.Password, in.RecoveryCode = "", ""
 	}
 
 	username := strings.ToLower(strings.TrimSpace(in.Username))
@@ -72,7 +77,7 @@ func (a *API) CreateAccountRecovery(w http.ResponseWriter, r *http.Request) {
 	deviceName := strings.TrimSpace(in.DeviceName)
 	platform := strings.TrimSpace(in.Platform)
 	identityPublicKey := strings.TrimSpace(in.IdentityPublicKey)
-	if !validUsername(username) || (in.Password == "" && in.RecoveryCode == "") || len(in.Password) > maxPasswordLen || hasControlChars(in.Password) || len(in.RecoveryCode) > 128 || hasControlChars(in.RecoveryCode) || deviceID == "" || len(deviceID) > 128 || hasControlChars(deviceID) || deviceName == "" || len(deviceName) > maxDeviceName || hasControlChars(deviceName) || !validIdentityPublicKey(identityPublicKey) {
+	if !validUsername(username) || (!in.NoCode && in.Password == "" && in.RecoveryCode == "") || len(in.Password) > maxPasswordLen || hasControlChars(in.Password) || len(in.RecoveryCode) > 128 || hasControlChars(in.RecoveryCode) || deviceID == "" || len(deviceID) > 128 || hasControlChars(deviceID) || deviceName == "" || len(deviceName) > maxDeviceName || hasControlChars(deviceName) || !validIdentityPublicKey(identityPublicKey) {
 		writeError(w, http.StatusBadRequest, "invalid recovery request data")
 		return
 	}
@@ -95,6 +100,11 @@ func (a *API) CreateAccountRecovery(w http.ResponseWriter, r *http.Request) {
 		if in.Password != "" {
 			_ = derivePasswordKey(in.Password, []byte("locallink-recovery-dummy-salt-v1"), passwordIterations)
 		}
+		if in.NoCode {
+			// Bundle 222: tell the user the name is wrong (register already shows taken names).
+			writeErrorCode(w, http.StatusNotFound, "NO_ACCOUNT", "no account with this username")
+			return
+		}
 		writeError(w, http.StatusUnauthorized, "invalid recovery credentials")
 		return
 	}
@@ -102,7 +112,7 @@ func (a *API) CreateAccountRecovery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "account is not active")
 		return
 	}
-	authorized := false
+	authorized := in.NoCode
 	if in.RecoveryCode != "" && recoveryHash != "" && recoveryEnabled != 0 {
 		authorized = secureTokenEqual(recoveryHash, tokenHash(in.RecoveryCode))
 	}
@@ -121,6 +131,11 @@ func (a *API) CreateAccountRecovery(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	nowText := now.Format(time.RFC3339Nano)
 	expires := now.Add(accountRecoveryTTL)
+	kind := recoveryKindMove
+	if in.NoCode {
+		// No time limit: Pending until the admin answers.
+		expires, kind = now.Add(noCodeRequestTTL), recoveryKindNoCode
+	}
 	_, _ = a.store.DB().Exec(`UPDATE account_recovery_requests SET status='expired',completed_at=? WHERE user_id=? AND status IN ('pending','approved')`, nowText, userID)
 
 	requestSecret, err := newRecoverySecret()
@@ -129,15 +144,15 @@ func (a *API) CreateAccountRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestID := uuid.NewString()
-	_, err = a.store.DB().Exec(`INSERT INTO account_recovery_requests(id,user_id,target_device_id,target_device_name,target_platform,target_identity_public_key,request_secret_hash,status,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		requestID, userID, deviceID, deviceName, platform, identityPublicKey, tokenHash(requestSecret), "pending", nowText, expires.Format(time.RFC3339Nano))
+	_, err = a.store.DB().Exec(`INSERT INTO account_recovery_requests(id,user_id,target_device_id,target_device_name,target_platform,target_identity_public_key,request_secret_hash,status,created_at,expires_at,kind) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		requestID, userID, deviceID, deviceName, platform, identityPublicKey, tokenHash(requestSecret), "pending", nowText, expires.Format(time.RFC3339Nano), kind)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save recovery request")
 		return
 	}
 
 	serverID, fingerprint := a.currentServerIdentity()
-	a.audit("account_recovery_request", userID, "target="+deviceID)
+	a.audit("account_recovery_request", userID, "target="+deviceID+" kind="+kind)
 	a.auditSecurity("account_recovery_request", userID, deviceID, registrationKey(r), "recovery request created")
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"request": AccountRecoveryRequest{
@@ -147,6 +162,7 @@ func (a *API) CreateAccountRecovery(w http.ResponseWriter, r *http.Request) {
 		},
 		"request_secret":  requestSecret,
 		"poll_expires_at": expires.Format(time.RFC3339Nano),
+		"kind":            kind,
 	})
 }
 
@@ -221,6 +237,9 @@ func (a *API) CompleteAccountRecovery(w http.ResponseWriter, r *http.Request) {
 		DeviceName         string `json:"device_name"`
 		Platform           string `json:"platform"`
 		IdentityPublicKey  string `json:"identity_public_key"`
+		// Bundle 222: a no-code request finishes with a new password.
+		NewPassword string `json:"new_password"`
+		HardwareFP  string `json:"hardware_fp"`
 	}
 	if err := decodeJSON(r, &in, 12<<10); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -255,8 +274,8 @@ func (a *API) CompleteAccountRecovery(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	var userID, targetDeviceID, requestStatus, requestExpires, recoveryExpires, recoveryHash, requestedIdentityKey, username string
-	err = tx.QueryRow(`SELECT r.user_id,r.target_device_id,r.status,r.expires_at,COALESCE(r.recovery_expires_at,''),COALESCE(r.recovery_credential_hash,''),r.target_identity_public_key,u.username FROM account_recovery_requests r JOIN users u ON u.id=r.user_id WHERE r.id=? AND r.request_secret_hash=?`, in.RequestID, tokenHash(in.RequestSecret)).Scan(&userID, &targetDeviceID, &requestStatus, &requestExpires, &recoveryExpires, &recoveryHash, &requestedIdentityKey, &username)
+	var userID, targetDeviceID, requestStatus, requestExpires, recoveryExpires, recoveryHash, requestedIdentityKey, username, kind string
+	err = tx.QueryRow(`SELECT r.user_id,r.target_device_id,r.status,r.expires_at,COALESCE(r.recovery_expires_at,''),COALESCE(r.recovery_credential_hash,''),r.target_identity_public_key,u.username,COALESCE(r.kind,'move') FROM account_recovery_requests r JOIN users u ON u.id=r.user_id WHERE r.id=? AND r.request_secret_hash=?`, in.RequestID, tokenHash(in.RequestSecret)).Scan(&userID, &targetDeviceID, &requestStatus, &requestExpires, &recoveryExpires, &recoveryHash, &requestedIdentityKey, &username, &kind)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "recovery request not found")
 		return
@@ -281,7 +300,11 @@ func (a *API) CompleteAccountRecovery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusGone, "recovery credential has expired")
 		return
 	}
-	if recoveryHash == "" || !secureTokenEqual(recoveryHash, tokenHash(in.RecoveryCredential)) {
+	typed := in.RecoveryCredential
+	if kind == recoveryKindNoCode {
+		typed = digitsOnly222(typed)
+	}
+	if recoveryHash == "" || !secureTokenEqual(recoveryHash, tokenHash(typed)) {
 		writeError(w, http.StatusUnauthorized, "invalid recovery credential")
 		return
 	}
@@ -296,6 +319,12 @@ func (a *API) CompleteAccountRecovery(w http.ResponseWriter, r *http.Request) {
 	var accountStatus string
 	if err := tx.QueryRow(`SELECT status FROM users WHERE id=?`, userID).Scan(&accountStatus); err != nil || accountStatus != "active" {
 		writeError(w, http.StatusForbidden, "account is not active")
+		return
+	}
+	if kind == recoveryKindNoCode {
+		// Bundle 222: new password, this phone signed in, other phones stay signed in.
+		tx.Rollback()
+		a.completeNoCode222(w, r, in.RequestID, userID, username, in.NewPassword, in.DeviceID, in.DeviceName, in.Platform, strings.TrimSpace(in.HardwareFP), in.IdentityPublicKey)
 		return
 	}
 	var existing int
@@ -388,7 +417,7 @@ func (a *API) AdminRecoveryRequests(w http.ResponseWriter, r *http.Request) {
 		args = append(args, params.Cursor.Key, params.Cursor.Key, params.Cursor.ID)
 	}
 	args = append(args, params.Limit+1)
-	rows, err := a.store.DB().Query(`SELECT r.id,u.username,r.user_id,r.status,r.created_at,r.expires_at,r.target_device_id,r.target_device_name,r.target_platform,COALESCE(r.approved_at,''),COALESCE(r.rejected_at,''),COALESCE(r.rejected_reason,''),COALESCE(r.recovery_expires_at,'') FROM account_recovery_requests r JOIN users u ON u.id=r.user_id `+where+` ORDER BY r.created_at DESC,r.id DESC LIMIT ?`, args...)
+	rows, err := a.store.DB().Query(`SELECT r.id,u.username,r.user_id,r.status,r.created_at,r.expires_at,r.target_device_id,r.target_device_name,r.target_platform,COALESCE(r.approved_at,''),COALESCE(r.rejected_at,''),COALESCE(r.rejected_reason,''),COALESCE(r.recovery_expires_at,''),COALESCE(r.kind,'move') FROM account_recovery_requests r JOIN users u ON u.id=r.user_id `+where+` ORDER BY r.created_at DESC,r.id DESC LIMIT ?`, args...)
 	if err != nil {
 		writeError(w, 500, "failed to list recovery requests")
 		return
@@ -410,11 +439,12 @@ func (a *API) AdminRecoveryRequests(w http.ResponseWriter, r *http.Request) {
 		RejectedAt        string `json:"rejected_at,omitempty"`
 		RejectedReason    string `json:"rejected_reason,omitempty"`
 		RecoveryExpiresAt string `json:"recovery_expires_at,omitempty"`
+		Kind              string `json:"kind"` // Bundle 222: move | no_code | reset_code
 	}
 	out := make([]row, 0, params.Limit)
 	for rows.Next() {
 		var x row
-		if err := rows.Scan(&x.ID, &x.Username, &x.UserID, &x.Status, &x.CreatedAt, &x.ExpiresAt, &x.TargetDeviceID, &x.TargetDeviceName, &x.TargetPlatform, &x.ApprovedAt, &x.RejectedAt, &x.RejectedReason, &x.RecoveryExpiresAt); err != nil {
+		if err := rows.Scan(&x.ID, &x.Username, &x.UserID, &x.Status, &x.CreatedAt, &x.ExpiresAt, &x.TargetDeviceID, &x.TargetDeviceName, &x.TargetPlatform, &x.ApprovedAt, &x.RejectedAt, &x.RejectedReason, &x.RecoveryExpiresAt, &x.Kind); err != nil {
 			writeError(w, 500, "failed to read recovery requests")
 			return
 		}
@@ -459,15 +489,15 @@ func (a *API) AdminApproveRecovery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "recovery request id required")
 		return
 	}
-	credential, err := newRecoverySecret()
+	credential, credHash, ttl, err := a.newRecoveryCredential222(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate recovery credential")
 		return
 	}
 	now := time.Now().UTC()
 	nowText := now.Format(time.RFC3339Nano)
-	expires := now.Add(recoveryCredentialTTL).Format(time.RFC3339Nano)
-	res, err := a.store.DB().Exec(`UPDATE account_recovery_requests SET status='approved',approved_at=?,recovery_expires_at=?,recovery_credential_hash=?,rejected_at=NULL,rejected_reason='' WHERE id=? AND status='pending' AND expires_at>?`, nowText, expires, tokenHash(credential), id, nowText)
+	expires := now.Add(ttl).Format(time.RFC3339Nano)
+	res, err := a.store.DB().Exec(`UPDATE account_recovery_requests SET status='approved',approved_at=?,recovery_expires_at=?,recovery_credential_hash=?,rejected_at=NULL,rejected_reason='' WHERE id=? AND status='pending' AND expires_at>?`, nowText, expires, credHash, id, nowText)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to approve recovery request")
 		return
@@ -492,15 +522,15 @@ func (a *API) AdminReissueRecovery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "recovery request id required")
 		return
 	}
-	credential, err := newRecoverySecret()
+	credential, credHash, ttl, err := a.newRecoveryCredential222(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate recovery credential")
 		return
 	}
 	now := time.Now().UTC()
 	nowText := now.Format(time.RFC3339Nano)
-	expires := now.Add(recoveryCredentialTTL).Format(time.RFC3339Nano)
-	res, err := a.store.DB().Exec(`UPDATE account_recovery_requests SET recovery_expires_at=?,recovery_credential_hash=? WHERE id=? AND status='approved' AND expires_at>?`, expires, tokenHash(credential), id, nowText)
+	expires := now.Add(ttl).Format(time.RFC3339Nano)
+	res, err := a.store.DB().Exec(`UPDATE account_recovery_requests SET recovery_expires_at=?,recovery_credential_hash=? WHERE id=? AND status='approved' AND expires_at>?`, expires, credHash, id, nowText)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to reissue recovery credential")
 		return

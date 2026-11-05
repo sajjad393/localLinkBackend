@@ -568,7 +568,8 @@ func TestNoteDeviceFrameKeepsPresenceAndLastSeenFresh(t *testing.T) {
 	api, cleanup := setupAdminTest(t)
 	defer cleanup()
 	seedConversation(t, api)
-	stale := time.Now().Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	// Bundle 222: UTC like the server writes (a +05:00 PC compared the text wrongly).
+	stale := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339Nano)
 	if _, err := api.store.DB().Exec(`UPDATE devices SET last_seen_at=? WHERE id='device-a'`, stale); err != nil {
 		t.Fatalf("back-date last_seen: %v", err)
 	}

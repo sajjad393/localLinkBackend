@@ -68,6 +68,9 @@ func main() {
 	mux.Handle("POST /api/v1/account/recovery/request", api.WithIdempotency("account-recovery-request", http.HandlerFunc(api.CreateAccountRecovery)))
 	mux.HandleFunc("POST /api/v1/account/recovery/status", api.AccountRecoveryStatus)
 	mux.Handle("POST /api/v1/account/recovery/complete", api.WithIdempotency("account-recovery-complete", http.HandlerFunc(api.CompleteAccountRecovery)))
+	// Bundle 222: Forgot password with the recovery code (online + offline sync).
+	mux.HandleFunc("POST /api/v1/auth/join-relay", api.JoinRelay222)
+	mux.Handle("POST /api/v1/account/recovery/reset", api.WithIdempotency("account-recovery-reset", http.HandlerFunc(api.ResetPasswordWithCode222)))
 	mux.HandleFunc("GET /api/v1/account/recovery-code/status", api.RecoveryCodeStatus)
 	mux.HandleFunc("GET /api/v1/account/restore/manifest", api.GetAccountRestoreManifest)
 	mux.HandleFunc("GET /api/v1/account/restore/data", api.GetAccountRestoreData)

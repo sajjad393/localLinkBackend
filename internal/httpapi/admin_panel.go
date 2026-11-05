@@ -176,8 +176,13 @@ func (a *API) AdminUsers(w http.ResponseWriter, r *http.Request) {
 	a.enrichUsers216(out)
 	resp := struct {
 		Users []AdminUser `json:"users"`
+		// Bundle 222: offline accounts phones saw nearby (first page only, on request).
+		NotOnServer []notOnServerRow222 `json:"not_on_server,omitempty"`
 		PageInfo
 	}{Users: out}
+	if r.URL.Query().Get("include") == "not_on_server" && params.Cursor == nil {
+		resp.NotOnServer = a.notOnServer222()
+	}
 	resp.HasMore = hasMore
 	if hasMore && len(out) > 0 {
 		last := out[len(out)-1]

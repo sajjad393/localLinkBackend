@@ -488,10 +488,12 @@ LL.views = {};
       if (host && host.querySelector('.side216')) host.innerHTML = '';
       const query = ctx.state.filters.users || { search: '', status: '', admin: '' };
       el.innerHTML = ui.bootSkeleton219('users'); // Bundle 219
-      const result = await settle(ctx.api('/api/v1/admin/users?limit=200'));
+      // Bundle 222: plus offline accounts phones saw nearby ("Not on server yet").
+      const result = await settle(ctx.api('/api/v1/admin/users?limit=200&include=not_on_server'));
       if (!result.ok) { el.innerHTML = ui.panel({ title: 'Users', body: ui.errorState(result.error, 'users') }); return; }
 
       const all = Array.isArray(result.data.users) ? result.data.users : [];
+      const nos = Array.isArray(result.data.not_on_server) ? result.data.not_on_server : [];
       const map = {};
       all.forEach((u) => { map[u.id] = u; });
       ctx.state.people216 = { at: Date.now(), map };
@@ -506,19 +508,31 @@ LL.views = {};
         return true;
       });
       const adminCount = all.filter((u) => u.admin_role).length;
-      const chip = query.admin === 'yes' ? 'admins' : (query.status || 'all');
+      const chip = query.nos ? 'not_on_server' : (query.admin === 'yes' ? 'admins' : (query.status || 'all'));
+      const nosShown = (query.nos || chip === 'all') ? nos.filter((x) => {
+        const hay = `${x.name || ''} ${x.username || ''}`.toLowerCase();
+        return !search || hay.indexOf(search) >= 0;
+      }) : [];
       const columns = [
         { label: 'Person' }, { label: 'Admin' }, { label: 'Phones', numeric: true },
         { label: 'Status', status: true }, { label: 'Last seen' }, { label: '' },
       ].map((c) => (c.label === 'Admin' ? { label: 'Admin level' } : c));
-      const rows = filtered.map((u) => [
+      const nosRows222 = nosShown.map((x) => [
+        ui.person216({ userId: '', name: x.name || x.username || '\u2014', sub: `@${x.username || ''} (may change if taken)${x.model ? ' \u00b7 ' + x.model : ''}`, size: 32 }),
+        '<span class="subtle">\u2014</span>',
+        '<span>1</span>',
+        `${ui.pill216('Not on server yet', 'grey')}${num(x.carriers) > 0 ? `<div class="type-caption nos222">Join box carried by ${fmt.number(x.carriers)} ${num(x.carriers) === 1 ? 'phone' : 'phones'} \u00b7 waiting for a phone with internet</div>` : ''}`,
+        `<span>${ui.esc(`${x.seen_by || ''} \u00b7 ${LINK_WORDS_222[x.link] || x.link || ''}`)}</span><div class="type-caption">${ui.esc(ui.when216(x.last_seen))}</div>`,
+        '<span class="subtle" title="No actions until the account joins">\u2014</span>',
+      ]);
+      const rows = (query.nos ? [] : filtered).map((u) => [
         who216(map, u.id, u.display_name || u.username, '@' + (u.username || ''), { online: num(u.online_devices) > 0, size: 32 }),
         u.admin_role ? ui.pill216(ui.LEVELS_216[u.admin_role] || u.admin_role, 'gold') : '<span class="subtle">\u2014</span>',
         `<span>${fmt.number(u.devices)}</span>`,
         status216(u.status),
         `<span>${ui.esc(num(u.online_devices) > 0 ? 'Online now' : ui.when216(u.last_seen_at))}</span>`,
         `<button class="btn btn-sm" data-user-manage="${ui.esc(u.id)}">Manage</button>`,
-      ]);
+      ]).concat(nosRows222);
 
       el.innerHTML = `
         <div class="section">
@@ -528,9 +542,10 @@ LL.views = {};
               ${ui.chips216([
                 { value: 'all', label: 'All' }, { value: 'admins', label: 'Admins' }, { value: 'active', label: 'Active' },
                 { value: 'suspended', label: 'Suspended' }, { value: 'disabled', label: 'Off' },
+                { value: 'not_on_server', label: `Not on server ${nos.length}` },
               ], chip, 'data-users-chip')}
             </div>
-            <div class="row gap-sm" title="app admins">${ui.pill216(`${adminCount} admins`, 'gold')} ${ui.pill216(`${all.length} people`, 'grey')}</div>
+            <div class="row gap-sm" title="app admins">${ui.pill216(`${adminCount} admins`, 'gold')} ${ui.pill216(`${all.length} people`, 'grey')}${nos.length ? ' ' + ui.pill216(`${nos.length} not on server yet`, 'grey') : ''}</div>
           </div>
           ${ui.panel({
             pad0: true,
@@ -541,7 +556,7 @@ LL.views = {};
 
       el.querySelectorAll('[data-users-chip]').forEach((b) => b.addEventListener('click', () => {
         const v = b.getAttribute('data-users-chip');
-        ctx.state.filters.users = Object.assign({}, query, { admin: v === 'admins' ? 'yes' : '', status: ['active', 'suspended', 'disabled'].indexOf(v) >= 0 ? v : '' });
+        ctx.state.filters.users = Object.assign({}, query, { nos: v === 'not_on_server', admin: v === 'admins' ? 'yes' : '', status: ['active', 'suspended', 'disabled'].indexOf(v) >= 0 ? v : '' });
         ctx.refresh();
       }));
       el.querySelectorAll('[data-user-manage]').forEach((b) => b.addEventListener('click', () => {
@@ -550,6 +565,9 @@ LL.views = {};
       }));
     },
   };
+
+  // Bundle 222: link words for "Seen by".
+  const LINK_WORDS_222 = { wifi_direct: 'Wi-Fi Direct', mesh: 'Mesh', lan: 'Local Wi-Fi', router: 'Local Wi-Fi', server: 'Server' };
 
   // W5: the side panel. Buttons reuse the shell handlers (data-user-status,
   // data-user-admin with data-admin-mode="make" / "remove" / "level").
@@ -1026,7 +1044,7 @@ LL.views = {};
   const recovery = {
     id: 'recovery',
     title: 'Recovery',
-    subtitle: 'People who lost their phone and asked to get back in',
+    subtitle: 'Password help requests and lost phones',
     icon: 'i-restore',
     group: 'Safety',
     async mount(el, ctx) {
@@ -1037,10 +1055,13 @@ LL.views = {};
       const pending = list.filter((r) => String(r.status || '').toLowerCase() === 'pending');
       const earlier = list.filter((r) => String(r.status || '').toLowerCase() !== 'pending');
       const can = ctx.can('manageRecovery');
+      // Bundle 222: kinds. "No code" = forgot password without the recovery
+      // code (waits with no time limit; Approve gives a short code to read out).
+      const noCode222 = (r) => r.kind === 'no_code';
       const card = (r) => ui.panel({
-        body: `<div class="map216-row">${who216(map, r.user_id, r.display_name || r.username, `@${r.username || ''} \u00b7 new phone: ${r.target_device_name || '\u2014'}`, { size: 40 })}
-            ${ui.pill216('Waiting', 'orange')}</div>
-          <div class="type-caption" style="margin:6px 0 10px">Asked ${ui.esc(fmt.dateTime(r.created_at))} \u00b7 ends ${ui.esc(fmt.dateTime(r.expires_at))}</div>
+        body: `<div class="map216-row">${who216(map, r.user_id, r.display_name || r.username, `@${r.username || ''} \u00b7 ${noCode222(r) ? 'phone' : 'new phone'}: ${r.target_device_name || '\u2014'}`, { size: 40 })}
+            ${noCode222(r) ? ui.pill216('No code', 'orange') : ui.pill216('Waiting', 'orange')}</div>
+          <div class="type-caption" style="margin:6px 0 10px">Asked ${ui.esc(fmt.dateTime(r.created_at))} \u00b7 ${noCode222(r) ? 'forgot password, no recovery code \u00b7 waits until you answer' : 'ends ' + ui.esc(fmt.dateTime(r.expires_at))}</div>
           ${can ? `<textarea class="input" data-reason-for="${ui.esc(r.id)}" rows="2" maxlength="200" placeholder="Reason (only if you reject)" style="width:100%;height:auto;padding:8px"></textarea>
           <div class="row gap-sm" style="margin-top:10px">
             <button class="btn btn-primary" data-recovery="approve" data-id="${ui.esc(r.id)}">Approve</button>
@@ -1049,19 +1070,22 @@ LL.views = {};
           </div>` : '<div class="type-caption">Your admin level can only look.</div>'}`,
       });
       const tone = { approved: ['Approved', 'green'], rejected: ['Rejected', 'red'], completed: ['Finished', 'green'], expired: ['Ended', 'grey'] };
+      const kind222 = { no_code: ['No code', 'orange'], reset_code: ['Reset with code', 'green'], move: ['Lost phone', 'grey'] };
       el.innerHTML = `
         <div class="section">
           ${!result.ok ? ui.panel({ body: ui.errorState(result.error, 'recovery') }) : ''}
           ${pending.map(card).join('')}
-          ${result.ok && !pending.length ? ui.panel({ body: '<div class="empty216"><b>No one is waiting</b><br>Requests show here when someone starts recovery on a new phone.</div>' }) : ''}
+          ${result.ok && !pending.length ? ui.panel({ body: '<div class="empty216"><b>No one is waiting</b><br>Requests show here when someone forgets the password without the recovery code, or starts recovery on a new phone.</div>' }) : ''}
           ${earlier.length ? ui.panel({
             title: 'Earlier',
             body: ui.table({
-              columns: [{ label: 'Person' }, { label: 'New phone' }, { label: 'When' }, { label: '' }],
+              columns: [{ label: 'Person' }, { label: 'Kind' }, { label: 'Phone' }, { label: 'When' }, { label: '' }],
               rows: earlier.map((r) => {
                 const t = tone[String(r.status || '').toLowerCase()] || [fmt.titleCase(r.status || ''), 'grey'];
+                const k = kind222[r.kind || 'move'] || kind222.move;
+                const done = r.kind === 'reset_code' ? '<span class="type-caption">Done by the user (audit only)</span>' : ui.pill216(t[0], t[1]);
                 return [who216(map, r.user_id, r.display_name || r.username, '@' + (r.username || ''), { size: 28 }),
-                  emptyText(r.target_device_name), `<span>${ui.esc(fmt.dateTime(r.created_at))}</span>`, ui.pill216(t[0], t[1])];
+                  ui.pill216(k[0], k[1]), emptyText(r.target_device_name), `<span>${ui.esc(fmt.dateTime(r.created_at))}</span>`, done];
               }),
             }),
           }) : ''}
