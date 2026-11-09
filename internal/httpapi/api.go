@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -172,6 +173,13 @@ type PairingInfo struct {
 	Fingerprint     string `json:"fingerprint"`
 	Name            string `json:"name"`
 	PairingRequired bool   `json:"pairing_required"`
+	// Bundle 231 (audit S2): only when the phone sends ?nonce=. The proof is
+	// the server signing key's signature, so a machine that merely copies the
+	// public fingerprint can't pass. See pairing_proof_231.go.
+	ServerKey string `json:"server_key,omitempty"`
+	KeyID     string `json:"key_id,omitempty"`
+	ProofTS   string `json:"ts,omitempty"`
+	Proof     string `json:"proof,omitempty"`
 }
 
 func (a *API) PairingInfo(w http.ResponseWriter, r *http.Request) {
@@ -204,14 +212,26 @@ func (a *API) PairingInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	sum := sha256.Sum256(rawSecret)
 	fingerprint := strings.ToUpper(hex.EncodeToString(sum[:]))
-	writeJSON(w, http.StatusOK, PairingInfo{
+	nonce, hasNonce, nonceOK := pairingNonce231(r)
+	if !nonceOK {
+		writeErrorCode(w, http.StatusBadRequest, "BAD_NONCE", "nonce must be 16 to 64 bytes, base64url")
+		return
+	}
+	info := PairingInfo{
 		Service:         "locallink",
 		Version:         "1",
 		ServerID:        serverID,
 		Fingerprint:     fingerprint,
 		Name:            getenv("LOCALLINK_NAME", "LocalLink Server"),
 		PairingRequired: strings.TrimSpace(os.Getenv("LOCALLINK_PAIRING_CODE")) != "",
-	})
+	}
+	if hasNonce {
+		if err := a.addPairingProof231(&info, nonce); err != nil {
+			writeError(w, http.StatusInternalServerError, "server key unavailable")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (a *API) Health(w http.ResponseWriter, r *http.Request) {
@@ -246,6 +266,13 @@ func validNetworkMessageBody(body string) bool {
 }
 
 func (a *API) RegisterDevice(w http.ResponseWriter, r *http.Request) {
+	// Bundle 230: a device without an account is off unless the server owner
+	// turns it on (LOCALLINK_ALLOW_DEVICE_ONLY=true). Phones sign up or log in
+	// with an account (auth.go), which never uses this route.
+	if !deviceOnlyAllowed() {
+		writeErrorCode(w, http.StatusForbidden, "DEVICE_ONLY_DISABLED", "an account is required")
+		return
+	}
 	if !a.allowRegistration(registrationKey(r)) {
 		w.Header().Set("Retry-After", "60")
 		writeError(w, http.StatusTooManyRequests, "device registration rate limit exceeded")
@@ -322,7 +349,7 @@ FROM devices WHERE id=?`, id).Scan(&existing.ID, &existing.Name, &existing.Platf
 	}
 
 	requiredPairing := strings.TrimSpace(os.Getenv("LOCALLINK_PAIRING_CODE"))
-	if requiredPairing != "" && in.PairingCode != requiredPairing {
+	if requiredPairing != "" && !secureTokenEqual(in.PairingCode, requiredPairing) {
 		writeError(w, http.StatusForbidden, "invalid pairing code")
 		return
 	}
@@ -1005,6 +1032,12 @@ func (a *API) authorizeDevice(r *http.Request) (string, bool) {
 	if deviceStatus != "active" {
 		return "", false
 	}
+	// Bundle 230: an old device-only token (no account) stops working unless
+	// LOCALLINK_ALLOW_DEVICE_ONLY=true.
+	if userID == "" && !deviceOnlyAllowed() {
+		logDeviceOnlyRefused230(id)
+		return "", false
+	}
 	if userID != "" && userStatus != "active" {
 		return "", false
 	}
@@ -1175,4 +1208,34 @@ func getenv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// deviceOnlyAllowed (Bundle 230): devices without an account (POST
+// /api/v1/devices) work only when LOCALLINK_ALLOW_DEVICE_ONLY=true, or in the
+// test environment (old tests use them).
+func deviceOnlyAllowed() bool {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("LOCALLINK_ALLOW_DEVICE_ONLY")), "true") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("LOCALLINK_ENV")), "test")
+}
+
+var deviceOnlyLog230 struct {
+	sync.Mutex
+	at time.Time
+}
+
+// logDeviceOnlyRefused230 writes at most one line a minute.
+func logDeviceOnlyRefused230(deviceID string) {
+	deviceOnlyLog230.Lock()
+	defer deviceOnlyLog230.Unlock()
+	if time.Since(deviceOnlyLog230.at) < time.Minute {
+		return
+	}
+	deviceOnlyLog230.at = time.Now()
+	short := deviceID
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	log.Printf("DEVICE_ONLY_REFUSED device=%s", short)
 }

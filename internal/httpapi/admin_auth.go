@@ -20,6 +20,22 @@ import (
 // limit is simply far away.
 const adminSessionTTL = 10 * 365 * 24 * time.Hour
 
+// Bundle 230: a sign-in that is not used for 180 days ends (web console and
+// admin phone). Every use moves last_seen_at, so an admin who uses it keeps
+// it; expires_at above is unchanged, so the session row and its offline key
+// stay. The admin phone refresh (user_admins.go) also moves last_seen_at.
+const adminSessionIdle = 180 * 24 * time.Hour
+
+// adminSessionIdleOut is true when lastSeen is more than adminSessionIdle ago.
+// An unreadable time is not treated as idle (the old rules still apply).
+func adminSessionIdleOut(lastSeen string, now time.Time) bool {
+	t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(lastSeen))
+	if err != nil {
+		return false
+	}
+	return now.Sub(t) > adminSessionIdle
+}
+
 type AdminAccount struct {
 	ID        string `json:"id"`
 	Username  string `json:"username"`
@@ -207,6 +223,10 @@ func (a *API) AdminLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid admin credentials")
 		return
 	}
+	// Bundle 230: an old hash (fewer rounds) is replaced after a good login.
+	if iterations < passwordIterations {
+		a.rehashPassword230("admin_accounts", admin.ID, in.Password, hashB64)
+	}
 	token, err := newToken()
 	if err != nil {
 		writeError(w, 500, "failed to create admin session")
@@ -265,10 +285,16 @@ func (a *API) authorizeAdminSession(r *http.Request) (AdminAccount, bool) {
 		return AdminAccount{}, false
 	}
 	var out AdminAccount
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var lastSeen string
+	nowTime := time.Now().UTC()
+	now := nowTime.Format(time.RFC3339Nano)
 	// Bundle 214: a linked (app user) admin shows the app username.
-	err := a.store.DB().QueryRow(`SELECT aa.id,COALESCE(u.username,aa.username),aa.role,aa.status,aa.created_at,COALESCE(aa.user_id,''),COALESCE(s.device_id,'') FROM admin_sessions s JOIN admin_accounts aa ON aa.id=s.admin_id LEFT JOIN users u ON u.id=aa.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND aa.status='active'`, tokenHash(token), now).Scan(&out.ID, &out.Username, &out.Role, &out.Status, &out.CreatedAt, &out.UserID, &out.DeviceID)
+	err := a.store.DB().QueryRow(`SELECT aa.id,COALESCE(u.username,aa.username),aa.role,aa.status,aa.created_at,COALESCE(aa.user_id,''),COALESCE(s.device_id,''),COALESCE(s.last_seen_at,s.created_at) FROM admin_sessions s JOIN admin_accounts aa ON aa.id=s.admin_id LEFT JOIN users u ON u.id=aa.user_id WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND aa.status='active'`, tokenHash(token), now).Scan(&out.ID, &out.Username, &out.Role, &out.Status, &out.CreatedAt, &out.UserID, &out.DeviceID, &lastSeen)
 	if err != nil {
+		return AdminAccount{}, false
+	}
+	// Bundle 230: unused for 180 days = signed out.
+	if adminSessionIdleOut(lastSeen, nowTime) {
 		return AdminAccount{}, false
 	}
 	// Bundle 214: a phone admin session works only while that phone is still

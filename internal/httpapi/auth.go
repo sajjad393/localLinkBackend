@@ -16,7 +16,12 @@ import (
 	"github.com/google/uuid"
 )
 
-var passwordIterations = 180000
+// Bundle 230: new and changed server passwords use 600000 rounds (OWASP 2023
+// PBKDF2-HMAC-SHA256 advice). Old hashes keep their stored round count and
+// still verify; a successful login quietly re-hashes them (rehashPassword230).
+// Phones keep their own 180000 (lib/core/crypto/password_kdf.dart); hashes a
+// phone sends (join relay, reset by hash) keep the count the phone sent.
+var passwordIterations = 600000
 
 const (
 	passwordKeyLength  = 32
@@ -75,7 +80,7 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid username, password, device id, or device name")
 		return
 	}
-	if required := strings.TrimSpace(getenv("LOCALLINK_PAIRING_CODE", "")); required != "" && pairingCode != required {
+	if required := strings.TrimSpace(getenv("LOCALLINK_PAIRING_CODE", "")); required != "" && !secureTokenEqual(pairingCode, required) {
 		writeErrorCode(w, http.StatusForbidden, "PAIRING_REQUIRED", "invalid pairing code")
 		return
 	}
@@ -268,6 +273,12 @@ func (a *API) LoginAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.resetLoginFailures(user.ID)
+	// Bundle 230: an old hash (fewer rounds) is replaced now that the password
+	// is known to be right. Runs outside any transaction (the KDF is slow and
+	// the DB has one connection) and only if nobody changed the hash meanwhile.
+	if iterations < passwordIterations {
+		a.rehashPassword230("users", user.ID, password, hashB64)
+	}
 
 	var deviceOwner sql.NullString
 	var deviceStatus string
@@ -447,21 +458,41 @@ func derivePasswordKey(password string, salt []byte, iterations int) []byte {
 		iterations = passwordIterations
 	}
 	// PBKDF2-HMAC-SHA256, block 1. Implemented locally to keep the backend dependency-light.
-	h := func(data []byte) []byte {
-		mac := hmac.New(sha256.New, []byte(password))
-		_, _ = mac.Write(data)
-		return mac.Sum(nil)
-	}
+	// Bundle 230: one HMAC is reused (Reset + Sum into the same buffer), so a
+	// round costs no new allocation. Same bytes as before, about 3x faster.
+	mac := hmac.New(sha256.New, []byte(password))
 	block := make([]byte, len(salt)+4)
 	copy(block, salt)
 	binary.BigEndian.PutUint32(block[len(salt):], 1)
-	u := h(block)
+	_, _ = mac.Write(block)
+	u := mac.Sum(make([]byte, 0, sha256.Size))
 	t := append([]byte(nil), u...)
 	for i := 2; i <= iterations; i++ {
-		u = h(u)
+		mac.Reset()
+		_, _ = mac.Write(u)
+		u = mac.Sum(u[:0])
 		for j := range t {
 			t[j] ^= u[j]
 		}
 	}
 	return t[:passwordKeyLength]
+}
+
+// rehashPassword230 (Bundle 230) stores a fresh salt and a passwordIterations
+// hash for a password that was just verified. table is "users" or
+// "admin_accounts" (fixed strings, never user input). The WHERE on the old
+// hash makes it a no-op if a reset or another login changed it meanwhile.
+// Failures are ignored: the old hash keeps working.
+func (a *API) rehashPassword230(table, id, password, oldHashB64 string) {
+	if table != "users" && table != "admin_accounts" {
+		return
+	}
+	salt := make([]byte, passwordSaltLength)
+	if _, err := rand.Read(salt); err != nil {
+		return
+	}
+	hash := derivePasswordKey(password, salt, passwordIterations)
+	_, _ = a.store.DB().Exec(`UPDATE `+table+` SET password_salt=?,password_hash=?,password_iterations=?,updated_at=? WHERE id=? AND password_hash=?`,
+		base64.RawURLEncoding.EncodeToString(salt), base64.RawURLEncoding.EncodeToString(hash), passwordIterations,
+		time.Now().UTC().Format(time.RFC3339Nano), id, oldHashB64)
 }

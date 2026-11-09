@@ -349,7 +349,7 @@ func (a *API) AdminOwnSessions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		exp, _ := time.Parse(time.RFC3339Nano, x.ExpiresAt)
-		x.Active = x.RevokedAt == "" && exp.After(now)
+		x.Active = x.RevokedAt == "" && exp.After(now) && !adminSessionIdleOut(x.LastSeenAt, now) // Bundle 230: unused 180 days
 		x.Current = secureTokenEqual(storedHash, tokenHashValue)
 		out = append(out, x)
 	}
