@@ -62,6 +62,26 @@ func (h *Hub) Remove(deviceID string, c *Client) {
 	}
 }
 
+// TrySendTo (bundle 251) queues payload for every socket of deviceID but
+// never closes a socket whose queue is full: the piece is dropped instead.
+// True when at least one socket took it.
+func (h *Hub) TrySendTo(deviceID string, payload []byte) bool {
+	h.mu.RLock()
+	set := h.clients[deviceID]
+	clients := make([]*Client, 0, len(set))
+	for c := range set {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
+	ok := false
+	for _, c := range clients {
+		if c.EnqueueText(payload) == nil {
+			ok = true
+		}
+	}
+	return ok
+}
+
 func (h *Hub) SendTo(deviceID string, payload []byte) {
 	h.mu.RLock()
 	set := h.clients[deviceID]

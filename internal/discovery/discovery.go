@@ -22,6 +22,9 @@ type Response struct {
 	Port     int    `json:"port"`
 	Name     string `json:"name"`
 	Protocol string `json:"protocol"`
+	// Bundle 243 (S3 A): the HTTPS port when on (the app pins the
+	// certificate through the signed pairing proof, never from here).
+	TLSPort int `json:"tls_port,omitempty"`
 }
 
 func Start(serverAddr string, name string, port int) (func(), error) {
@@ -58,6 +61,7 @@ func Start(serverAddr string, name string, port int) (func(), error) {
 		Port:     port,
 		Name:     name,
 		Protocol: protocol,
+		TLSPort:  tlsPort243(),
 	})
 
 	go func() {
@@ -100,4 +104,14 @@ func advertisedProtocol() string {
 		return "https"
 	}
 	return "http"
+}
+
+// tlsPort243 reads LOCALLINK_TLS_PORT_ADVERTISE (set by main.go when HTTPS
+// auto is on). 0 = none.
+func tlsPort243() int {
+	v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("LOCALLINK_TLS_PORT_ADVERTISE")))
+	if err != nil || v <= 0 || v > 65535 {
+		return 0
+	}
+	return v
 }

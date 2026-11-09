@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"locallink/backend/internal/discovery"
 	"locallink/backend/internal/httpapi"
 	"locallink/backend/internal/store"
+	"locallink/backend/internal/tlsauto"
 )
 
 func main() {
@@ -108,6 +111,10 @@ func main() {
 	mux.HandleFunc("GET /api/v1/admin/users/{id}/avatar", api.AdminUserAvatar)
 	mux.HandleFunc("GET /api/v1/admin/link-map", api.AdminLinkMap)
 	mux.HandleFunc("POST /api/v1/admin/user/status", api.AdminSetUserStatus)
+	mux.HandleFunc("GET /api/v1/admin/duplicates", api.AdminDuplicates235)
+	mux.HandleFunc("POST /api/v1/admin/duplicates/new-owner", api.AdminDuplicateNewOwner235)
+	mux.HandleFunc("POST /api/v1/admin/duplicates/dismiss", api.AdminDuplicateDismiss235)
+	mux.HandleFunc("POST /api/v1/account/return-note", api.ReturnNote235)
 	mux.HandleFunc("GET /api/v1/admin/user/network-policy", api.AdminGetUserNetworkPolicy)
 	mux.HandleFunc("POST /api/v1/admin/user/network-policy", api.AdminUpdateUserNetworkPolicy)
 	mux.HandleFunc("GET /api/v1/admin/sessions", api.AdminSessions)
@@ -294,6 +301,11 @@ func main() {
 		}
 	}()
 
+	// Bundle 243 (audit S3 part A): HTTPS with a self-signed certificate on
+	// a second port (8443), next to plain HTTP (8080) during the move.
+	// Phones trust the certificate by its hash from the signed pairing proof.
+	tlsSrv := startAutoTLS243(api, srv.Handler, dbPath)
+
 	stopDiscovery, err := discovery.Start(addr, getenv("LOCALLINK_NAME", "LocalLink Server"), 8080)
 	if err != nil {
 		log.Printf("LAN discovery disabled: %v", err)
@@ -341,6 +353,69 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)
+	if tlsSrv != nil {
+		_ = tlsSrv.Shutdown(ctx)
+	}
+}
+
+// startAutoTLS243 starts HTTPS on LOCALLINK_TLS_ADDR (default :8443) unless
+// LOCALLINK_TLS_AUTO=false. Any failure only logs: HTTP keeps working.
+func startAutoTLS243(api *httpapi.API, handler http.Handler, dbPath string) *http.Server {
+	if strings.EqualFold(strings.TrimSpace(getenv("LOCALLINK_TLS_AUTO", "true")), "false") {
+		log.Printf("TLS_AUTO_243 off")
+		return nil
+	}
+	tlsAddr := getenv("LOCALLINK_TLS_ADDR", ":8443")
+	port := addrPort243(tlsAddr)
+	if port <= 0 {
+		log.Printf("TLS_AUTO_243 bad LOCALLINK_TLS_ADDR %q", tlsAddr)
+		return nil
+	}
+	dir := getenv("LOCALLINK_TLS_DIR", filepath.Join(filepath.Dir(dbPath), "tls"))
+	certPath, keyPath, sha, err := tlsauto.Ensure(dir)
+	if err != nil {
+		log.Printf("TLS_AUTO_243 certificate failed: %v", err)
+		return nil
+	}
+	pair, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		log.Printf("TLS_AUTO_243 load failed: %v", err)
+		return nil
+	}
+	ln, err := tls.Listen("tcp", tlsAddr, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{pair}})
+	if err != nil {
+		log.Printf("TLS_AUTO_243 listen failed on %s: %v", tlsAddr, err)
+		return nil
+	}
+	tlsSrv := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       5 * time.Minute,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
+	api.SetTLS243(port, sha)
+	_ = os.Setenv("LOCALLINK_TLS_PORT_ADVERTISE", strconv.Itoa(port))
+	log.Printf("TLS_AUTO_243 HTTPS on %s cert_sha256=%s", tlsAddr, sha)
+	go func() {
+		if err := tlsSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Printf("TLS_AUTO_243 server error: %v", err)
+		}
+	}()
+	return tlsSrv
+}
+
+func addrPort243(addr string) int {
+	i := strings.LastIndex(addr, ":")
+	if i < 0 {
+		return 0
+	}
+	v, err := strconv.Atoi(addr[i+1:])
+	if err != nil || v <= 0 || v > 65535 {
+		return 0
+	}
+	return v
 }
 
 func resetAdminCredentials() error {

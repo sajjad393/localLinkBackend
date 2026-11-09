@@ -216,7 +216,8 @@ func (a *API) applyJoinBox222(b joinBoxBody222, carrier string) joinAnswerBody22
 	if display == "" {
 		display = username
 	}
-	if required := strings.TrimSpace(getenv("LOCALLINK_PAIRING_CODE", "")); required != "" && !secureTokenEqual(required, strings.TrimSpace(b.PairingCode)) {
+	// Bundle 236 (B4): a box from an account made offline needs no pairing code.
+	if required := strings.TrimSpace(getenv("LOCALLINK_PAIRING_CODE", "")); required != "" && offline == "" && !secureTokenEqual(required, strings.TrimSpace(b.PairingCode)) {
 		return refuse("pairing")
 	}
 	// The phone id: free, hers already, or someone else's (stays local + Audit).
@@ -233,6 +234,10 @@ func (a *API) applyJoinBox222(b joinBoxBody222, carrier string) joinAnswerBody22
 		}
 		if !owner.Valid || owner.String == "" || (linkedUser != "" && owner.String != linkedUser) || (linkedUser == "" && !a.sameRecovery222(owner.String, b.RecoveryHash)) {
 			a.auditSecurity("join_relay_device_taken", owner.String, b.DeviceID, "relay:"+carrier, "phone id belongs to another account")
+			// Bundle 235: the same phone with a new account waits for proof.
+			if o := a.findDuplicateOwner235(b.DeviceID, b.HardwareFP, username); o != nil {
+				a.noteDuplicateWait235(o, b.DeviceID, b.HardwareFP, username, display, "relay:"+carrier)
+			}
 			return refuse("device_taken")
 		}
 		// Her phone is already on the server (she joined by herself or by an
@@ -402,7 +407,13 @@ type notOnServerRow222 struct {
 	LastSeen  string `json:"last_seen"`
 	Carriers  int    `json:"carriers"`
 	Status    string `json:"status"`
+	// Bundle 238: not seen for 30 days - the web list hides it behind
+	// "Show hidden (N)". The row stays (kept 60 days, as before).
+	Hidden bool `json:"hidden,omitempty"`
 }
+
+// offlineHideAfter238: an offline row not seen for this long is hidden.
+const offlineHideAfter238 = 30 * 24 * time.Hour
 
 func (a *API) notOnServer222() []notOnServerRow222 {
 	rows, err := a.store.DB().Query(`SELECT s.device_id,s.username,s.name,s.phone_model,COALESCE(u.username,s.seen_by_device),s.link,s.first_seen,s.last_seen,s.carriers
@@ -421,6 +432,9 @@ func (a *API) notOnServer222() []notOnServerRow222 {
 				x.Carriers = strings.Count(carriers, ",") + 1
 			}
 			x.Status = "not_on_server"
+			if t, err := time.Parse(time.RFC3339Nano, x.LastSeen); err == nil && time.Since(t) > offlineHideAfter238 {
+				x.Hidden = true
+			}
 			out = append(out, x)
 		}
 	}

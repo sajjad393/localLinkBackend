@@ -19,7 +19,15 @@ type AccountContact struct {
 	// reciprocal side. Omitted from JSON when false so older clients are
 	// byte-compatible.
 	IsPrivate bool `json:"is_private,omitempty"`
+	// Bundle 237: the contact's other phones on this server (any status,
+	// newest first, max 10, never the current one). The app joins chats
+	// with those old phone ids into ONE chat with this person. Omitted
+	// when empty so older clients see the same bytes.
+	PastDeviceIDs []string `json:"past_device_ids,omitempty"`
 }
+
+// maxPastDevices237 caps the old phone ids sent per contact.
+const maxPastDevices237 = 10
 
 func (a *API) accountContactsForUser(userID string) ([]AccountContact, error) {
 	// Contact relationship model is MUTUAL: when A adds B, B sees A too.
@@ -54,6 +62,43 @@ func (a *API) accountContactsForUser(userID string) ([]AccountContact, error) {
 		}
 		c.IsPrivate = isPrivate != 0
 		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Close before the next queries (the store runs on one connection).
+	rows.Close()
+	for i := range out {
+		past, err := a.pastDevices237(out[i].UserID, out[i].DeviceID)
+		if err != nil {
+			return nil, err
+		}
+		out[i].PastDeviceIDs = past
+	}
+	return out, nil
+}
+
+// pastDevices237 lists the user's other phone ids (any status), newest
+// first, at most maxPastDevices237. A phone given to a new owner (235)
+// has the new owner's user_id now, so it is never listed for the old one.
+func (a *API) pastDevices237(userID, current string) ([]string, error) {
+	rows, err := a.store.DB().Query(`SELECT id FROM devices
+		WHERE user_id=? AND id<>?
+		ORDER BY COALESCE(last_seen_at,'') DESC, COALESCE(created_at,'') DESC
+		LIMIT ?`, userID, current, maxPastDevices237)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if id != "" {
+			out = append(out, id)
+		}
 	}
 	return out, rows.Err()
 }

@@ -53,6 +53,8 @@ type WSMessage struct {
 	Neighbors []Neighbor `json:"neighbors,omitempty"`
 	// Bundle 222: offline accounts this phone saw nearby (old phones don't send it).
 	OfflineSeen []offlineSeen222 `json:"offline_seen,omitempty"`
+	// Bundle 251 (P9): one locked voice piece (base64), passed on unopened.
+	Voice string `json:"voice,omitempty"`
 }
 
 func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
@@ -303,6 +305,18 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 					peerID = call.CallerID
 				}
 				a.hub.SendTo(peerID, mustJSON(WSMessage{Type: "call_peer_video_state", CallID: call.ID, SenderID: deviceID, RecipientID: peerID, Status: call.Status, Enabled: msg.Enabled, SelectedMediaCodec: msg.SelectedMediaCodec}))
+			case "call_voice":
+				// Bundle 251 (P9): online voice. No reply per frame.
+				peer, reason, sayStop := a.relayVoice251(deviceID, msg.CallID, msg.Voice, time.Now())
+				if peer == "" {
+					if sayStop {
+						_ = client.WriteText(mustJSON(WSMessage{Type: "call_voice_stop", CallID: msg.CallID, Reason: reason}))
+					}
+					continue
+				}
+				if !a.hub.TrySendTo(peer, mustJSON(WSMessage{Type: "call_voice", CallID: msg.CallID, SenderID: deviceID, Voice: msg.Voice})) {
+					a.noteVoiceDropped251(msg.CallID)
+				}
 			case "call_heartbeat":
 				if strings.TrimSpace(msg.CallID) == "" {
 					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, Error: "call_id is required"}))

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,6 +66,11 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 		// and the recovery code that phone already shows (kept by the server).
 		OfflineUserID string `json:"offline_user_id"`
 		RecoveryCode  string `json:"recovery_code"`
+		// Bundle 236 (B2): an account made offline whose plain password is
+		// no longer on the phone sends its saved password lock instead.
+		PasswordHash       string `json:"password_hash"`
+		PasswordSalt       string `json:"password_salt"`
+		PasswordIterations int    `json:"password_iterations"`
 	}
 	if err := decodeJSON(r, &in, 12<<10); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -75,21 +81,44 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 	if len(hardwareFP) > 128 || hasControlChars(hardwareFP) {
 		hardwareFP = ""
 	}
-	username, password, deviceID, deviceName, platform, pairingCode, ok := normalizeAuthInput(in.Username, in.Password, in.DeviceID, in.DeviceName, in.Platform, in.PairingCode)
+	lock, lockMode, lockOK := registerLock236(in.Password, in.PasswordHash, in.PasswordSalt, in.PasswordIterations, offline)
+	if !lockOK {
+		writeError(w, http.StatusBadRequest, "invalid username, password, device id, or device name")
+		return
+	}
+	passwordIn := in.Password
+	if lockMode {
+		passwordIn = lockPlaceholder236 // only for the shared name / device checks below
+	}
+	username, password, deviceID, deviceName, platform, pairingCode, ok := normalizeAuthInput(in.Username, passwordIn, in.DeviceID, in.DeviceName, in.Platform, in.PairingCode)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid username, password, device id, or device name")
 		return
 	}
-	if required := strings.TrimSpace(getenv("LOCALLINK_PAIRING_CODE", "")); required != "" && !secureTokenEqual(pairingCode, required) {
+	// Bundle 236 (B4): an account made offline does not need the pairing code.
+	if required := strings.TrimSpace(getenv("LOCALLINK_PAIRING_CODE", "")); required != "" && offline == "" && !secureTokenEqual(pairingCode, required) {
 		writeErrorCode(w, http.StatusForbidden, "PAIRING_REQUIRED", "invalid pairing code")
 		return
 	}
-	salt := make([]byte, passwordSaltLength)
-	if _, err := rand.Read(salt); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to generate password salt")
+	// Bundle 235: this very phone already belongs to another account - the
+	// person must prove that account in the app; the admin sees the wait.
+	if o := a.findDuplicateOwner235(deviceID, hardwareFP, username); o != nil {
+		a.noteDuplicateWait235(o, deviceID, hardwareFP, username, "", "register")
+		writeDuplicate235(w, o)
 		return
 	}
-	hash := derivePasswordKey(password, salt, passwordIterations)
+	var salt, hash []byte
+	iterations := passwordIterations
+	if lockMode {
+		salt, hash, iterations = lock.salt, lock.hash, lock.iterations
+	} else {
+		salt = make([]byte, passwordSaltLength)
+		if _, err := rand.Read(salt); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to generate password salt")
+			return
+		}
+		hash = derivePasswordKey(password, salt, passwordIterations)
+	}
 	token, err := newToken()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate device credentials")
@@ -117,7 +146,7 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	if _, err = tx.Exec(`INSERT INTO users(id,username,password_salt,password_hash,password_iterations,status,created_at,updated_at,recovery_code_hash,recovery_code_created_at,recovery_code_rotated_at,recovery_code_enabled) VALUES(?,?,?,?,?,'active',?,?,?,?,?,1)`,
-		userID, username, base64.RawURLEncoding.EncodeToString(salt), base64.RawURLEncoding.EncodeToString(hash), passwordIterations, nowText, nowText, tokenHash(recoveryCode), nowText, nowText); err != nil {
+		userID, username, base64.RawURLEncoding.EncodeToString(salt), base64.RawURLEncoding.EncodeToString(hash), iterations, nowText, nowText, tokenHash(recoveryCode), nowText, nowText); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			writeErrorCode(w, http.StatusConflict, "USERNAME_TAKEN", "username is already registered")
 		} else {
@@ -160,6 +189,9 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 	if offline != "" {
 		a.carryOfflineBlock218(userID, offline, deviceID)
 		a.audit("account_from_offline", userID, "offline="+offline)
+	}
+	if lockMode {
+		a.audit("account_register_lock", userID, "mode=lock iterations="+strconv.Itoa(iterations))
 	}
 	a.audit("account_register", userID, "username="+username)
 	writeJSON(w, http.StatusCreated, AuthResponse{
@@ -291,6 +323,12 @@ func (a *API) LoginAccount(w http.ResponseWriter, r *http.Request) {
 		if !deviceOwner.Valid || deviceOwner.String == "" || deviceOwner.String != user.ID {
 			var owner, fp string
 			_ = a.store.DB().QueryRow(`SELECT COALESCE(u.username,''),COALESCE(d.hardware_fp,'') FROM devices d LEFT JOIN users u ON u.id=d.user_id WHERE d.id=?`, deviceID).Scan(&owner, &fp)
+			// Bundle 235: another account on this very phone waits for proof.
+			if o := a.findDuplicateOwner235(deviceID, hardwareFP, username); o != nil {
+				a.noteDuplicateWait235(o, deviceID, hardwareFP, username, "", "login")
+				writeDuplicate235(w, o)
+				return
+			}
 			writeDeviceTaken218(w, "device id belongs to another or legacy device", owner, fp, hardwareFP)
 			return
 		}

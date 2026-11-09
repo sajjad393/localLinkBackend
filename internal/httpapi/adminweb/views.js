@@ -489,11 +489,17 @@ LL.views = {};
       const query = ctx.state.filters.users || { search: '', status: '', admin: '' };
       el.innerHTML = ui.bootSkeleton219('users'); // Bundle 219
       // Bundle 222: plus offline accounts phones saw nearby ("Not on server yet").
-      const result = await settle(ctx.api('/api/v1/admin/users?limit=200&include=not_on_server'));
+      const [result, dupResult] = await Promise.all([
+        settle(ctx.api('/api/v1/admin/users?limit=200&include=not_on_server')),
+        settle(ctx.api('/api/v1/admin/duplicates')), // Bundle 235 (an old server = no list)
+      ]);
       if (!result.ok) { el.innerHTML = ui.panel({ title: 'Users', body: ui.errorState(result.error, 'users') }); return; }
 
       const all = Array.isArray(result.data.users) ? result.data.users : [];
-      const nos = Array.isArray(result.data.not_on_server) ? result.data.not_on_server : [];
+      const nosAll = Array.isArray(result.data.not_on_server) ? result.data.not_on_server : [];
+      // Bundle 238: offline rows not seen for 30 days hide behind "Show hidden (N)".
+      const nos = nosAll.filter((x) => !x.hidden);
+      const nosHidden = nosAll.filter((x) => x.hidden);
       const map = {};
       all.forEach((u) => { map[u.id] = u; });
       ctx.state.people216 = { at: Date.now(), map };
@@ -508,11 +514,15 @@ LL.views = {};
         return true;
       });
       const adminCount = all.filter((u) => u.admin_role).length;
-      const chip = query.nos ? 'not_on_server' : (query.admin === 'yes' ? 'admins' : (query.status || 'all'));
-      const nosShown = (query.nos || chip === 'all') ? nos.filter((x) => {
+      const dups = dupResult.ok && Array.isArray(dupResult.data.duplicates) ? dupResult.data.duplicates : [];
+      const chip = query.dups ? 'dups' : (query.nos ? 'not_on_server' : (query.admin === 'yes' ? 'admins' : (query.status || 'all')));
+      const nosMatch = (x) => {
         const hay = `${x.name || ''} ${x.username || ''}`.toLowerCase();
         return !search || hay.indexOf(search) >= 0;
-      }) : [];
+      };
+      const nosOn = (query.nos || chip === 'all');
+      const hiddenMatch238 = nosOn ? nosHidden.filter(nosMatch) : [];
+      const nosShown = nosOn ? nos.filter(nosMatch).concat(query.hidden238 ? hiddenMatch238 : []) : [];
       const columns = [
         { label: 'Person' }, { label: 'Admin' }, { label: 'Phones', numeric: true },
         { label: 'Status', status: true }, { label: 'Last seen' }, { label: '' },
@@ -521,18 +531,19 @@ LL.views = {};
         ui.person216({ userId: '', name: x.name || x.username || '\u2014', sub: `@${x.username || ''} (may change if taken)${x.model ? ' \u00b7 ' + x.model : ''}`, size: 32 }),
         '<span class="subtle">\u2014</span>',
         '<span>1</span>',
-        `${ui.pill216('Not on server yet', 'grey')}${num(x.carriers) > 0 ? `<div class="type-caption nos222">Join box carried by ${fmt.number(x.carriers)} ${num(x.carriers) === 1 ? 'phone' : 'phones'} \u00b7 waiting for a phone with internet</div>` : ''}`,
+        `${ui.pill216(x.hidden ? 'Hidden \u00b7 not seen 30+ days' : 'Not on server yet', 'grey')}${num(x.carriers) > 0 ? `<div class="type-caption nos222">Join box carried by ${fmt.number(x.carriers)} ${num(x.carriers) === 1 ? 'phone' : 'phones'} \u00b7 waiting for a phone with internet</div>` : ''}`,
         `<span>${ui.esc(`${x.seen_by || ''} \u00b7 ${LINK_WORDS_222[x.link] || x.link || ''}`)}</span><div class="type-caption">${ui.esc(ui.when216(x.last_seen))}</div>`,
         '<span class="subtle" title="No actions until the account joins">\u2014</span>',
       ]);
-      const rows = (query.nos ? [] : filtered).map((u) => [
+      const rows = (query.nos || query.dups ? [] : filtered).map((u) => [
         who216(map, u.id, u.display_name || u.username, '@' + (u.username || ''), { online: num(u.online_devices) > 0, size: 32 }),
         u.admin_role ? ui.pill216(ui.LEVELS_216[u.admin_role] || u.admin_role, 'gold') : '<span class="subtle">\u2014</span>',
         `<span>${fmt.number(u.devices)}</span>`,
         status216(u.status),
         `<span>${ui.esc(num(u.online_devices) > 0 ? 'Online now' : ui.when216(u.last_seen_at))}</span>`,
         `<button class="btn btn-sm" data-user-manage="${ui.esc(u.id)}">Manage</button>`,
-      ]).concat(nosRows222);
+      ]).concat(query.dups ? [] : nosRows222);
+      const dupPanel = (chip === 'all' || chip === 'dups') && dups.length ? dupPanel235(dups, map, ctx.can('manageUsers')) : '';
 
       el.innerHTML = `
         <div class="section">
@@ -543,20 +554,55 @@ LL.views = {};
                 { value: 'all', label: 'All' }, { value: 'admins', label: 'Admins' }, { value: 'active', label: 'Active' },
                 { value: 'suspended', label: 'Suspended' }, { value: 'disabled', label: 'Off' },
                 { value: 'not_on_server', label: `Not on server ${nos.length}` },
-              ], chip, 'data-users-chip')}
+              ].concat(dups.length || chip === 'dups' ? [{ value: 'dups', label: `Waiting for proof ${dups.length}` }] : []), chip, 'data-users-chip')}
             </div>
             <div class="row gap-sm" title="app admins">${ui.pill216(`${adminCount} admins`, 'gold')} ${ui.pill216(`${all.length} people`, 'grey')}${nos.length ? ' ' + ui.pill216(`${nos.length} not on server yet`, 'grey') : ''}</div>
           </div>
-          ${ui.panel({
+          ${dupPanel}
+          ${chip === 'dups' ? (dups.length ? '' : ui.panel({ body: '<div class="empty216">No phone is waiting for proof.</div>' })) : ui.panel({
             pad0: true,
             body: `${rows.length ? `<div style="padding:0 4px">${ui.table({ columns, rows })}</div>` : ''}
-              <div class="empty216">${rows.length ? '' : 'No one found? Try another name or filter.'}</div>`,
+              <div class="empty216">${rows.length ? '' : 'No one found? Try another name or filter.'}</div>${hiddenMatch238.length ? `
+              <label class="row gap-sm hidden238" style="padding:10px 18px 14px;cursor:pointer;align-items:center">
+                <input type="checkbox" data-users-hidden238 ${query.hidden238 ? 'checked' : ''}>
+                <span>Show hidden (${fmt.number(hiddenMatch238.length)})</span>
+                <span class="type-caption subtle">Offline accounts not seen for 30 days</span>
+              </label>` : ''}`,
           })}
         </div>`;
 
       el.querySelectorAll('[data-users-chip]').forEach((b) => b.addEventListener('click', () => {
         const v = b.getAttribute('data-users-chip');
-        ctx.state.filters.users = Object.assign({}, query, { nos: v === 'not_on_server', admin: v === 'admins' ? 'yes' : '', status: ['active', 'suspended', 'disabled'].indexOf(v) >= 0 ? v : '' });
+        ctx.state.filters.users = Object.assign({}, query, { dups: v === 'dups', nos: v === 'not_on_server', admin: v === 'admins' ? 'yes' : '', status: ['active', 'suspended', 'disabled'].indexOf(v) >= 0 ? v : '' });
+        ctx.refresh();
+      }));
+      // Bundle 238: Show hidden (N).
+      el.querySelectorAll('[data-users-hidden238]').forEach((b) => b.addEventListener('change', () => {
+        ctx.state.filters.users = Object.assign({}, query, { hidden238: !!b.checked });
+        ctx.refresh();
+      }));
+      // Bundle 235: New owner... / Dismiss.
+      el.querySelectorAll('[data-dup235-owner]').forEach((b) => b.addEventListener('click', async () => {
+        const d = dups.find((x) => x.id === b.getAttribute('data-dup235-owner'));
+        if (!d) return;
+        const ok = await newOwnerDialog235(d, map);
+        if (!ok) return;
+        try {
+          await ctx.api('/api/v1/admin/duplicates/new-owner', { method: 'POST', body: { id: d.id, confirm: d.new_username } });
+          ctx.toast(`Phone given to @${d.new_username}`, 'success');
+        } catch (err) {
+          ctx.toast(err.message || 'Could not free the phone', 'error');
+        }
+        ctx.refresh();
+      }));
+      el.querySelectorAll('[data-dup235-dismiss]').forEach((b) => b.addEventListener('click', async () => {
+        b.disabled = true;
+        try {
+          await ctx.api('/api/v1/admin/duplicates/dismiss', { method: 'POST', body: { id: b.getAttribute('data-dup235-dismiss') } });
+          ctx.toast('Hidden. The new account stays blocked.', 'success');
+        } catch (err) {
+          ctx.toast(err.message || 'Could not hide', 'error');
+        }
         ctx.refresh();
       }));
       el.querySelectorAll('[data-user-manage]').forEach((b) => b.addEventListener('click', () => {
@@ -565,6 +611,69 @@ LL.views = {};
       }));
     },
   };
+
+  // Bundle 235: "Waiting for proof" - a new account tried to join on a phone
+  // that already has an account. Only the server's refusals are listed, so a
+  // line says when it tried (not which phone saw it).
+  function dupPanel235(dups, map, canManage) {
+    const columns = [{ label: 'New account' }, { label: 'Phone' }, { label: 'Old account (kept)' }, { label: 'Status', status: true }, { label: '' }];
+    const rows = dups.map((d) => {
+      const old = map[d.old_user_id] || {};
+      const dev = String(d.device_id || '');
+      const short = dev.length > 8 ? '\u2026' + dev.slice(-6) : dev;
+      return [
+        ui.person216({ userId: '', name: d.new_name || d.new_username || '\u2014', sub: `@${d.new_username || ''} \u00b7 not on server`, size: 32 }),
+        `<span>${ui.esc(d.device_name || 'Phone')}</span><div class="type-caption">${ui.esc(short)} \u00b7 same hardware</div>`,
+        who216(map, d.old_user_id, d.old_name || old.display_name || d.old_username, `@${d.old_username || old.username || ''}${old.devices ? ' \u00b7 ' + fmt.number(old.devices) + (num(old.devices) === 1 ? ' phone' : ' phones') : ''}`, { size: 32 }),
+        `${ui.pill216('Blocked \u00b7 waiting', 'orange')}<div class="type-caption">Tried to join ${ui.esc(ui.when216(d.last_seen))}${num(d.tries) > 1 ? ' \u00b7 ' + fmt.number(d.tries) + ' tries' : ''}</div>`,
+        canManage
+          ? `<div class="row gap-sm"><button class="btn btn-sm" data-dup235-owner="${ui.esc(d.id)}">New owner\u2026</button><button class="btn btn-sm" data-dup235-dismiss="${ui.esc(d.id)}">Dismiss</button></div>`
+          : '<span class="subtle">\u2014</span>',
+      ];
+    });
+    return ui.panel({
+      pad0: true,
+      body: `<div style="padding:16px 18px 4px"><strong>Waiting for proof</strong>
+          <div class="type-caption">A new account tried to join on a phone that already has an account. It stays blocked until the person proves the old account.</div></div>
+        <div style="padding:0 4px">${ui.table({ columns, rows })}</div>
+        <div class="type-caption" style="padding:8px 18px 14px">Only Owner admins (Manage users) see the buttons. Dismiss hides the line; the block stays.</div>`,
+    });
+  }
+
+  // Bundle 235: the admin types the new name; no undo.
+  function newOwnerDialog235(d, map) {
+    return new Promise((resolve) => {
+      const host = document.getElementById('modal-host');
+      if (!host) { resolve(false); return; }
+      const old = map[d.old_user_id] || {};
+      const oldName = d.old_name || old.display_name || d.old_username || 'the old account';
+      const nu = String(d.new_username || '');
+      host.innerHTML = `<div class="modal-scrim" role="dialog" aria-modal="true">
+        <div class="modal">
+          <h2>${ui.esc(`Give ${oldName}'s phone to a new person?`)}</h2>
+          <p>${ui.esc(`@${d.old_username || ''} keeps the account, the password and the chats, but loses this phone (${d.device_name || 'Phone'}). @${nu} can then join from this phone, and friends' phones stop blocking it. There is no undo.`)}</p>
+          <label class="type-caption" for="dup235-confirm" style="display:block;margin:10px 0 6px;font-weight:600">${ui.esc(`Type ${nu} to confirm`)}</label>
+          <input class="input" id="dup235-confirm" data-dup235-input autocomplete="off" style="width:100%">
+          <div class="modal-actions">
+            <button class="btn" data-modal="cancel">Cancel</button>
+            <button class="btn btn-danger" data-modal="confirm" disabled>${ui.esc(`Give phone to @${nu}`)}</button>
+          </div>
+        </div>
+      </div>`;
+      const input = host.querySelector('[data-dup235-input]');
+      const go = host.querySelector('[data-modal="confirm"]');
+      const finish = (value) => { host.innerHTML = ''; resolve(value); };
+      input.addEventListener('input', () => {
+        go.disabled = input.value.trim().replace(/^@/, '').toLowerCase() !== nu.toLowerCase();
+      });
+      host.querySelector('[data-modal="cancel"]').addEventListener('click', () => finish(false));
+      go.addEventListener('click', () => { if (!go.disabled) finish(true); });
+      host.querySelector('.modal-scrim').addEventListener('click', (event) => {
+        if (event.target.classList.contains('modal-scrim')) finish(false);
+      });
+      input.focus();
+    });
+  }
 
   // Bundle 222: link words for "Seen by".
   const LINK_WORDS_222 = { wifi_direct: 'Wi-Fi Direct', mesh: 'Mesh', lan: 'Local Wi-Fi', router: 'Local Wi-Fi', server: 'Server' };

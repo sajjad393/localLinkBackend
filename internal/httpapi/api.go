@@ -52,6 +52,11 @@ type API struct {
 	runtimeProvider  func() map[string]any
 	resMu            sync.Mutex
 	resHistory       []resourceSample
+	// Bundle 243 (S3 A): the HTTPS port and the certificate hash told to
+	// phones in the signed pairing proof (ll-pair-v2). 0 / "" = no HTTPS.
+	tlsMu243   sync.RWMutex
+	tlsPort243 int
+	tlsSHA243  string
 }
 
 type messageRate struct {
@@ -180,6 +185,11 @@ type PairingInfo struct {
 	KeyID     string `json:"key_id,omitempty"`
 	ProofTS   string `json:"ts,omitempty"`
 	Proof     string `json:"proof,omitempty"`
+	// Bundle 243 (S3 A): with HTTPS on, the proof is ll-pair-v2 and also
+	// covers these two (ProofVersion = 2). Old apps ignore them.
+	ProofVersion  int    `json:"proof_v,omitempty"`
+	TLSPort       int    `json:"tls_port,omitempty"`
+	TLSCertSHA256 string `json:"tls_cert_sha256,omitempty"`
 }
 
 func (a *API) PairingInfo(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +236,7 @@ func (a *API) PairingInfo(w http.ResponseWriter, r *http.Request) {
 		PairingRequired: strings.TrimSpace(os.Getenv("LOCALLINK_PAIRING_CODE")) != "",
 	}
 	if hasNonce {
-		if err := a.addPairingProof231(&info, nonce); err != nil {
+		if err := a.addPairingProof(&info, nonce, r.URL.Query().Get("proof") == "2"); err != nil {
 			writeError(w, http.StatusInternalServerError, "server key unavailable")
 			return
 		}
