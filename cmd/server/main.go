@@ -91,6 +91,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/directory/phone", api.DirectoryByPhone)
 	mux.HandleFunc("GET /api/v1/directory/name", api.DirectoryByName)
 	mux.HandleFunc("GET /api/v1/directory/user/{id}", api.DirectoryByUserID)
+	mux.HandleFunc("GET /api/v1/directory/device/{id}", api.DirectoryByDevice) // Bundle 259
 	mux.HandleFunc("POST /api/v1/devices", api.RegisterDevice)
 	mux.HandleFunc("GET /api/v1/devices", api.ListDevices)
 	mux.HandleFunc("GET /api/v1/account/contacts", api.ListAccountContacts)
