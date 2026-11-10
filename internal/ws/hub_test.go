@@ -36,7 +36,14 @@ func TestClientOutboundQueueIsBounded(t *testing.T) {
 			t.Fatalf("enqueue %d: %v", i, err)
 		}
 	}
-	if err := c.EnqueueText([]byte("overflow")); err != ErrClientQueueFull {
+	// The write loop may already hold ONE frame (blocked on the pipe nobody
+	// reads), so one extra frame can fit; the next one must be refused.
+	// (Timing race seen on Windows: the write loop ran before the loop above.)
+	err := c.EnqueueText([]byte("overflow"))
+	if err == nil {
+		err = c.EnqueueText([]byte("overflow"))
+	}
+	if err != ErrClientQueueFull {
 		t.Fatalf("expected queue-full error, got %v", err)
 	}
 }
