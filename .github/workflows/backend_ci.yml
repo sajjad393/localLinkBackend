@@ -1,0 +1,40 @@
+# Backend 267/268: server checks after every push to main.
+# A red mark only warns you; it never stops a push. No real database and no
+# secrets are used (tests make their own temporary databases).
+name: Backend CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Format (report only - some old files were never gofmt-ed)
+        continue-on-error: true
+        run: test -z "$(gofmt -l . | tee gofmt_report.txt)"
+      - run: go build ./...
+      - run: go vet ./...
+      - name: Tests
+        run: go test -count=1 ./... 2>&1 | tee go_test.txt; exit ${PIPESTATUS[0]}
+      - name: Race detector
+        run: go test -race -count=1 ./... 2>&1 | tee go_race.txt; exit ${PIPESTATUS[0]}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-results
+          path: |
+            go_test.txt
+            go_race.txt
+            gofmt_report.txt
+          retention-days: 14

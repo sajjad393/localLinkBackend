@@ -90,6 +90,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/directory/user/{id}/avatar", api.FriendAvatar) // Bundle 204
 	mux.HandleFunc("GET /api/v1/directory/phone", api.DirectoryByPhone)
 	mux.HandleFunc("GET /api/v1/directory/name", api.DirectoryByName)
+	mux.HandleFunc("GET /api/v1/directory/people", api.DirectoryPeople) // Bundle 267
 	mux.HandleFunc("GET /api/v1/directory/user/{id}", api.DirectoryByUserID)
 	mux.HandleFunc("GET /api/v1/directory/device/{id}", api.DirectoryByDevice) // Bundle 259
 	mux.HandleFunc("POST /api/v1/devices", api.RegisterDevice)
