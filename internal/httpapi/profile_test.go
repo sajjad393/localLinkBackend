@@ -35,7 +35,7 @@ func TestProfileGetAndUpdate(t *testing.T) {
 	if err := json.Unmarshal(get.Body.Bytes(), &profile); err != nil {
 		t.Fatal(err)
 	}
-	if profile.Username != "profileuser" || profile.DisplayName != "Phone" {
+	if profile.Username != "profileuser" || profile.DisplayName != "profileuser" { // Bundle 276: never the phone name
 		t.Fatalf("unexpected profile: %+v", profile)
 	}
 

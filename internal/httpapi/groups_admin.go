@@ -52,8 +52,11 @@ func (a *API) loadGroup(gid string) (Group, error) {
 	return g, err
 }
 
-// memberNameSQL: profile nickname first, device label only as a fallback.
-const memberNameSQL = `COALESCE(NULLIF(TRIM(p.display_name),''),d.name)`
+// memberNameSQL: profile nickname first, then the username (Bundle 276),
+// then a phone name a person typed; never "My Android Phone (xxxx)".
+var memberNameSQL = `(CASE WHEN ` + okNameSQL276("p.display_name") + ` THEN TRIM(p.display_name)
+	WHEN TRIM(COALESCE((SELECT uu.username FROM users uu WHERE uu.id=d.user_id),''))<>'' THEN (SELECT uu.username FROM users uu WHERE uu.id=d.user_id)
+	WHEN ` + okNameSQL276("d.name") + ` THEN TRIM(d.name) ELSE 'LinkUp user' END)`
 
 func (a *API) groupRole(gid, id string) string {
 	var role string

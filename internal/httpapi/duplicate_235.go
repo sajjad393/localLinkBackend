@@ -71,6 +71,9 @@ func (a *API) findDuplicateOwner235(deviceID, hardwareFP, username string) *dupl
 	if strings.EqualFold(o.Username, strings.TrimSpace(username)) {
 		return nil // the same account again (re-login), not a duplicate
 	}
+	// Bundle 276: never "My Android Phone (xxxx)" as a person or a phone.
+	o.Name = personName276(o.Name, o.Username)
+	o.DeviceName = phoneLabel276(o.DeviceName, o.Name)
 	return &o
 }
 
@@ -153,6 +156,8 @@ func (a *API) AdminDuplicates235(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var d duplicateWait235
 		if rows.Scan(&d.ID, &d.DeviceID, &d.DeviceName, &d.OldUserID, &d.OldUsername, &d.OldName, &d.NewUsername, &d.NewName, &d.Via, &d.Tries, &d.FirstSeen, &d.LastSeen) == nil {
+			d.OldName = personName276(d.OldName, d.OldUsername) // Bundle 276
+			d.DeviceName = phoneLabel276(d.DeviceName, firstNonEmpty216(d.OldName, d.OldUsername))
 			out = append(out, d)
 		}
 	}

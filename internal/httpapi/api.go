@@ -114,6 +114,7 @@ func NewWithError(s *store.Store) (*API, error) {
 			return nil, err
 		}
 	}
+	api.fixDefaultProfileNames276() // Bundle 276: once at start, safe to repeat
 	return api, nil
 }
 

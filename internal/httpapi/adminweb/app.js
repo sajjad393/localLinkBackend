@@ -589,12 +589,89 @@
       'i-shield')}`;
   }
 
+  // ------------------------------------------------------- Bundle 274 live
+  // One live socket for the Map, Network and Dashboard pages. The browser can
+  // not put a header on a WebSocket and tokens never go in the URL, so the
+  // first frame carries the token. Reconnect after 1, 2, 5, 10 s; while the
+  // socket is down the page falls back to GET /admin/link-map every 15 s.
+  const live274 = {
+    sock: null, handler: null, retry: 0, timer: 0, poll: 0, on: false,
+    watch(fn) {
+      this.handler = typeof fn === 'function' ? fn : null;
+      if (this.handler) this.open(); else this.close();
+    },
+    url() {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return proto + '//' + window.location.host + '/api/v1/admin/live';
+    },
+    open() {
+      if (this.sock || !state.token || document.hidden || !this.handler || typeof WebSocket !== 'function') return;
+      clearTimeout(this.timer);
+      let s;
+      try { s = new WebSocket(this.url()); } catch (err) { this.down(); return; }
+      this.sock = s;
+      s.onopen = () => { try { s.send(JSON.stringify({ type: 'auth', token: state.token })); } catch (_) { /* closed */ } };
+      s.onmessage = (ev) => {
+        let msg = null;
+        try { msg = JSON.parse(ev.data); } catch (_) { return; }
+        if (!msg || msg.type !== 'link_map') return;
+        this.retry = 0;
+        this.stopPoll();
+        this.setOn(true);
+        if (this.handler) { try { this.handler(msg); } catch (_) { /* the page keeps what it shows */ } }
+      };
+      s.onclose = () => { if (this.sock === s) { this.sock = null; this.down(); } };
+      s.onerror = () => { try { s.close(); } catch (_) { /* gone */ } };
+    },
+    down() {
+      this.setOn(false);
+      if (!this.handler || !state.token) return;
+      this.startPoll();
+      if (document.hidden) return;
+      const waits = [1000, 2000, 5000, 10000];
+      const wait = waits[Math.min(this.retry, waits.length - 1)];
+      this.retry += 1;
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => this.open(), wait);
+    },
+    startPoll() {
+      if (this.poll) return;
+      this.poll = setInterval(async () => {
+        if (document.hidden || !this.handler || this.on || rateLimited()) return;
+        try {
+          const data = await api('/api/v1/admin/link-map');
+          if (this.handler && !this.on) this.handler(Object.assign({ type: 'link_map' }, data));
+        } catch (_) { /* next try in 15 s */ }
+      }, 15000);
+    },
+    stopPoll() { if (this.poll) { clearInterval(this.poll); this.poll = 0; } },
+    setOn(v) {
+      this.on = !!v;
+      document.querySelectorAll('[data-live274]').forEach((el) => {
+        el.classList.toggle('on', this.on);
+        const t = el.querySelector('span');
+        if (t) t.textContent = this.on ? 'Live' : 'Reconnecting\u2026';
+      });
+    },
+    close() {
+      clearTimeout(this.timer);
+      this.stopPoll();
+      this.retry = 0;
+      const s = this.sock;
+      this.sock = null;
+      if (s) { try { s.close(); } catch (_) { /* gone */ } }
+      this.setOn(false);
+    },
+  };
+  LL.live274 = live274;
+
   async function mountView(viewId, options) {
     const opts = options || {};
     const view = LL.views[viewId] || LL.views.dashboard;
     // Poll refreshes patch data in place: no full unmount, no chart teardown,
     // and never closing an overlay the operator may be using.
     const canPatch = opts.refresh && typeof view.refresh === 'function';
+    if (!canPatch && state.view !== viewId) live274.watch(null); // Bundle 274: a new page starts its own watch
     state.view = viewId;
     if (!canPatch) closeOverlays();
     if (!canPatch) LL.charts.reset();
@@ -628,6 +705,10 @@
       },
       refresh: () => mountView(state.view),
       navigate: (id) => mountView(id),
+      // Bundle 274: live link map (null = stop) and the "Live" dot.
+      live: (fn) => live274.watch(fn),
+      liveSync: () => live274.setOn(live274.on),
+      liveBadge: () => `<span class="live274${live274.on ? ' on' : ''}" data-live274><i></i><span>${live274.on ? 'Live' : 'Connecting\u2026'}</span></span>`,
     };
 
     if (canPatch) {
@@ -746,6 +827,7 @@
   }
 
   function handleExpiry() {
+    live274.watch(null);
     state.token = '';
     state.session = null;
     localStorage.removeItem(TOKEN_KEY);
@@ -757,6 +839,7 @@
   }
 
   function logout() {
+    live274.watch(null);
     const token = state.token;
     state.token = '';
     state.session = null;
@@ -1294,7 +1377,9 @@
   setInterval(() => { if (state.rateLimitedUntil) renderRateLimitBanner(); }, 1000);
 
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return;
+    // Bundle 274: the live socket closes while the tab is hidden, opens again when it is back.
+    if (document.hidden) { live274.close(); return; }
+    if (live274.handler) live274.open();
     if (state.booting219 && bootRetryAt219) { bootCheck219(); return; }
     if (rateLimited()) return;
     loadNotifications();

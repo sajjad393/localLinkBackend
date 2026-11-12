@@ -366,4 +366,21 @@ func adminStaticTokenAllowed(env string) bool {
 
 func (a *API) adminAudit(adminID, action, target, detail string) {
 	_, _ = a.store.DB().Exec(`INSERT INTO admin_audit(admin_id,action,target_id,detail,created_at) VALUES(?,?,?,?,?)`, adminID, action, target, detail, time.Now().UTC().Format(time.RFC3339Nano))
+	if mapAction274(action) {
+		a.linkMapChanged274() // Bundle 274: block / unblock / remove shows on the live map
+	}
+}
+
+// mapAction274: admin actions that change who is on the map.
+func mapAction274(action string) bool {
+	x := strings.ToLower(action)
+	if strings.Contains(x, "denied") || strings.Contains(x, "login") {
+		return false
+	}
+	for _, k := range []string{"block", "suspend", "revok", "remov", "delet", "disable", "enable", "restor", "device", "user_status", "new_owner"} {
+		if strings.Contains(x, k) {
+			return true
+		}
+	}
+	return false
 }

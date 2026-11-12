@@ -503,17 +503,39 @@ window.LL = window.LL || {};
 
   const LEVELS_216 = { owner: 'Owner', operator: 'Operator', security: 'Security', auditor: 'Auditor' };
   const LINKS_216 = {
-    server: { label: 'Server', tone: 'green', color: '#3FB26F' },
+    server: { label: 'Server', tone: 'blue', color: '#3B82C4' }, // Bundle 272: server lines blue
     wifi_direct: { label: 'Wi-Fi Direct', tone: 'orange', color: '#F5A524' },
     mesh: { label: 'Mesh', tone: 'purple', color: '#8B5CF6' },
     lan: { label: 'Local Wi-Fi', tone: 'teal', color: '#2DD4BF' },
   };
+
+  // Bundle 276: a person's name. A name the phone gave itself ("My Android
+  // Phone (1a2b)") is never shown: display name -> username (no @) -> "LinkUp user".
+  function isDefaultPhoneName276(v) {
+    const n = String(v || '').trim().toLowerCase();
+    return !n || n === 'my linkup phone' || n === 'phone' || n === 'linkup user' || n.indexOf('my android phone') === 0;
+  }
+  function name276(o) {
+    const x = o || {};
+    const d = String(x.display_name || x.displayName || x.name || '').trim();
+    if (!isDefaultPhoneName276(d)) return d;
+    const u = String(x.username || '').trim();
+    return u || 'LinkUp user';
+  }
+  // Bundle 276: a phone: its own name when a person typed one, else "<name>'s phone".
+  function phone276(phoneName, owner) {
+    const p = String(phoneName || '').trim();
+    if (!isDefaultPhoneName276(p)) return p;
+    const o = String(owner || '').trim();
+    return o && o !== 'LinkUp user' ? `${o}'s phone` : 'Phone';
+  }
 
   LL.ui = {
     esc, icon, badge, statusBadge, severityBadge, statusInfo, severityTone, severityIcon, token,
     panel, sectionHead, metricCard, statRow, headline, table, timeline, notificationItem,
     emptyState, errorState, skeletonPanel, skeletonCards, bootSkeleton219, segmented, healthRow, quickAction, note, filterBar,
     crown216, mix217, avatar216, person216, pill216, chips216, when216, initials216, TONES_216, LEVELS_216, LINKS_216,
+    isDefaultPhoneName276, name276, phone276,
   };
 
   LL.fmt = { number, bytes, relative, dateTime, bucket, duration, titleCase };

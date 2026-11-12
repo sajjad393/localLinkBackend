@@ -736,7 +736,7 @@ func (a *API) AdminChatRequestAnswer(w http.ResponseWriter, r *http.Request) {
 	if answerID != "" {
 		parts = a.answerParts(answerID)
 	}
-	_, deviceName := a.deviceUser(device)
+	deviceName := a.devicePerson276(device) // Bundle 276: the web says "from <name>'s phone"
 	resp := map[string]any{"id": id, "action": action, "answer_id": answerID, "from_device": device,
 		"from_name": deviceName, "of": of, "have": partRanges(parts), "parts": len(parts),
 		"complete": of > 0 && len(parts) >= of, "messages": []map[string]any{}}
@@ -950,7 +950,7 @@ func (a *API) AdminChatRequestList(w http.ResponseWriter, r *http.Request) {
 		if answerID, device, of := a.bestAnswer(row.ID); answerID != "" {
 			row.Of = of
 			row.Parts = len(a.answerParts(answerID))
-			_, row.FromName = a.deviceUser(device)
+			row.FromName = a.devicePerson276(device) // Bundle 276
 			var opened, closed sql.NullString
 			_ = a.store.DB().QueryRow(`SELECT first_opened_at, closed_at FROM admin_action_answer_meta WHERE answer_id=?`, answerID).Scan(&opened, &closed)
 			row.Opened, row.Closed = opened.Valid, closed.Valid

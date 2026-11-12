@@ -165,7 +165,19 @@ func (a *API) usernameOf(userID string) string {
 func (a *API) deviceUser(deviceID string) (string, string) {
 	var userID, name string
 	_ = a.store.DB().QueryRow(`SELECT COALESCE(user_id,''),COALESCE(name,'') FROM devices WHERE id=?`, deviceID).Scan(&userID, &name)
-	return userID, name
+	// Bundle 276: "noshad's phone", never "My Android Phone (xxxx)".
+	return userID, phoneLabel276(name, a.devicePerson276(deviceID))
+}
+
+// devicePerson276: the person a phone belongs to (display name -> username),
+// "" when the phone has no account.
+func (a *API) devicePerson276(deviceID string) string {
+	var display, username string
+	if a.store.DB().QueryRow(`SELECT COALESCE(p.display_name,''),COALESCE(u.username,'') FROM devices d JOIN users u ON u.id=d.user_id
+		LEFT JOIN profiles p ON p.user_id=u.id WHERE d.id=?`, deviceID).Scan(&display, &username) != nil {
+		return ""
+	}
+	return personName276(display, username)
 }
 
 type newAdminAction struct {

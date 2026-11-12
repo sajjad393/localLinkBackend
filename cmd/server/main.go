@@ -112,6 +112,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/admin/users", api.AdminUsers)
 	mux.HandleFunc("GET /api/v1/admin/users/{id}/avatar", api.AdminUserAvatar)
 	mux.HandleFunc("GET /api/v1/admin/link-map", api.AdminLinkMap)
+	mux.HandleFunc("GET /api/v1/admin/live", api.AdminLive) // Bundle 274: live admin map (first-frame auth)
 	mux.HandleFunc("POST /api/v1/admin/user/status", api.AdminSetUserStatus)
 	mux.HandleFunc("GET /api/v1/admin/duplicates", api.AdminDuplicates235)
 	mux.HandleFunc("POST /api/v1/admin/duplicates/new-owner", api.AdminDuplicateNewOwner235)

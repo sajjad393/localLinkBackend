@@ -126,6 +126,9 @@ LL.views = {};
         settle(ctx.api('/api/v1/admin/network')),
         settle(ctx.api('/api/v1/admin/settings')),
       ]);
+      // Bundle 274 (D-2): the Live network card is drawn from the link map
+      // (each phone once) and kept live by the admin socket.
+      const linkMap = await settle(ctx.api('/api/v1/admin/link-map'));
 
       if (settings.ok && settings.data) {
         ctx.setRefreshSeconds(settings.data.dashboard_refresh_seconds);
@@ -239,36 +242,22 @@ LL.views = {};
 
       // ---- network + security
       let networkBody;
-      if (!networkData) {
+      if (!networkData && !linkMap.ok) {
         networkBody = ui.errorState(network.error || 'The network endpoint did not respond.', 'dashboard');
       } else {
-        const online = num(networkData.online_devices);
-        const registered = num(networkData.devices);
-        const offline = Math.max(0, registered - online);
-        const segments = [
-          { label: 'Server connected', value: num(networkData.server_connected), color: 'var(--success)' },
-          { label: 'LAN available', value: num(networkData.lan_available), color: 'var(--primary)' },
-          { label: 'Wi-Fi Direct', value: num(networkData.wifi_direct_connected), color: 'var(--info)' },
-          { label: 'Mesh capable', value: num(networkData.mesh_available), color: 'var(--warning)' },
-          { label: 'Offline / idle', value: offline, color: 'var(--border-strong)' },
-        ];
-        const withColors = segments.map((s) => Object.assign({}, s, { color: cssVarToHex(s.color) }));
-        networkBody = `<div class="row gap-lg" style="align-items:center;flex-wrap:wrap">
-            <div style="width:150px;height:150px">${chartCanvas({ type: 'donut', options: { segments: withColors, size: 148, centerValue: fmt.number(online), centerLabel: 'online' } }, 148)}</div>
-            <div class="legend grow">${withColors.map((s) => `<div class="legend-item">
-              <span class="legend-swatch" style="background:${s.color}"></span>
-              <span>${ui.esc(s.label)}</span><span class="legend-value">${fmt.number(s.value)}</span></div>`).join('')}</div>
-          </div>
-          <div class="health-detail" style="margin-top:12px">
-            ${ui.statRow([
-              { label: 'Server links', value: fmt.number(networkData.server_connected) },
-              { label: 'LAN', value: fmt.number(networkData.lan_available) },
-              { label: 'Wi-Fi Direct', value: fmt.number(networkData.wifi_direct_connected) },
-              { label: 'Mesh', value: fmt.number(networkData.mesh_available) },
-              { label: 'Registered', value: fmt.number(registered) },
-              { label: 'Pending transfers', value: fmt.number(networkData.pending_transfers) },
-            ])}
-          </div>`;
+        networkBody = `<div data-live274-net>${liveNetwork274(linkMap.ok ? linkMap.data : null, networkData)}</div>`;
+      }
+      if (el.isConnected) {
+        // Bundle 274 (D-4): only the Live network card changes on a live frame.
+        ctx.live((msg) => {
+          const host = window.document.querySelector('#view [data-live274-net]');
+          if (!host || ctx.state.view !== 'dashboard') return;
+          const html = liveNetwork274(msg, networkData);
+          if (host.innerHTML === html) return;
+          host.innerHTML = html;
+          if (LL.charts && typeof LL.charts.prune === 'function') LL.charts.prune();
+          afterRender(host);
+        });
       }
 
       let securityBody;
@@ -302,8 +291,8 @@ LL.views = {};
       parts.push(pollRegion('netsec', `<div class="section">
         <div class="split-1-1">
           ${ui.panel({
-            title: 'Live network', subtitle: 'Transport state reported by connected devices',
-            actions: `<button class="btn btn-sm" data-nav="network">Open network topology</button>`,
+            title: 'Live network', subtitle: 'Each phone once, by how it is linked now',
+            actions: `${ctx.liveBadge ? ctx.liveBadge() : ''}<button class="btn btn-sm" data-nav="network">Open network topology</button>`,
             body: networkBody,
           })}
           ${ui.panel({
@@ -395,10 +384,59 @@ LL.views = {};
   function cssVarToHex(value) {
     const raw = String(value || '').trim();
     if (raw.startsWith('var(')) {
-      const name = raw.slice(4, -1).trim();
+      // Bundle 274 (D-1): ui.token adds the '--' itself; passing '--success'
+      // looked up '----success' and every colour fell back to blue.
+      const name = raw.slice(4, -1).trim().replace(/^--/, '');
       return ui.token(name, '#1e5bff');
     }
     return raw || '#1e5bff';
+  }
+
+  // Bundle 274 (D-2): Live network card from the link map. The ring counts
+  // each phone ONCE by how it is linked now (on the server, else the way it
+  // is reached, else offline), so the slices add up to the phones. The row
+  // under it counts LINKS by kind. Same colours as the maps.
+  const OFFLINE274 = '#98A2B3';
+  function phoneWays274(data) {
+    const nodes = data && Array.isArray(data.nodes) ? data.nodes : [];
+    const edges = data && Array.isArray(data.edges) ? data.edges : [];
+    const ways = { server: 0, lan: 0, wifi_direct: 0, mesh: 0, offline: 0 };
+    nodes.forEach((n) => {
+      const k = n.online ? 'server' : (ways[n.link] !== undefined && n.link !== 'offline' ? n.link : 'offline');
+      ways[k] += 1;
+    });
+    const links = { server: 0, lan: 0, wifi_direct: 0, mesh: 0 };
+    edges.forEach((e) => { if (links[e.link] !== undefined) links[e.link] += 1; });
+    return { nodes, edges, ways, links, online: nodes.filter((n) => n.online || (n.link && n.link !== 'offline')).length };
+  }
+
+  function liveNetwork274(data, networkData) {
+    const w = phoneWays274(data);
+    const L = ui.LINKS_216;
+    const segments = [
+      { label: 'On the server', value: w.ways.server, color: L.server.color },
+      { label: 'Local Wi-Fi only', value: w.ways.lan, color: L.lan.color },
+      { label: 'Wi-Fi Direct only', value: w.ways.wifi_direct, color: L.wifi_direct.color },
+      { label: 'Mesh only', value: w.ways.mesh, color: L.mesh.color },
+      { label: 'Offline', value: w.ways.offline, color: OFFLINE274 },
+    ];
+    const pending = networkData ? networkData.pending_transfers : 0;
+    return `<div class="row gap-lg" style="align-items:center;flex-wrap:wrap">
+        <div style="width:150px;height:150px">${chartCanvas({ type: 'donut', options: { segments, size: 148, centerValue: fmt.number(w.online), centerLabel: 'online' } }, 148)}</div>
+        <div class="legend grow">${segments.map((s) => `<div class="legend-item">
+          <span class="legend-swatch" style="background:${s.color}"></span>
+          <span>${ui.esc(s.label)}</span><span class="legend-value">${fmt.number(s.value)}</span></div>`).join('')}</div>
+      </div>
+      <div class="health-detail" style="margin-top:12px">
+        ${ui.statRow([
+          { label: 'Server links', value: fmt.number(w.links.server) },
+          { label: 'Wi-Fi links', value: fmt.number(w.links.lan) },
+          { label: 'Wi-Fi Direct links', value: fmt.number(w.links.wifi_direct) },
+          { label: 'Mesh links', value: fmt.number(w.links.mesh) },
+          { label: 'Phones', value: fmt.number(w.nodes.length) },
+          { label: 'Pending transfers', value: fmt.number(pending) },
+        ])}
+      </div>`;
   }
 
   function activityIcon(type) {
@@ -528,7 +566,7 @@ LL.views = {};
         { label: 'Status', status: true }, { label: 'Last seen' }, { label: '' },
       ].map((c) => (c.label === 'Admin' ? { label: 'Admin level' } : c));
       const nosRows222 = nosShown.map((x) => [
-        ui.person216({ userId: '', name: x.name || x.username || '\u2014', sub: `@${x.username || ''} (may change if taken)${x.model ? ' \u00b7 ' + x.model : ''}`, size: 32 }),
+        ui.person216({ userId: '', name: ui.name276({ display_name: x.name, username: x.username }), sub: `@${x.username || ''} (may change if taken)${x.model ? ' \u00b7 ' + x.model : ''}`, size: 32 }),
         '<span class="subtle">\u2014</span>',
         '<span>1</span>',
         `${ui.pill216(x.hidden ? 'Hidden \u00b7 not seen 30+ days' : 'Not on server yet', 'grey')}${num(x.carriers) > 0 ? `<div class="type-caption nos222">Join box carried by ${fmt.number(x.carriers)} ${num(x.carriers) === 1 ? 'phone' : 'phones'} \u00b7 waiting for a phone with internet</div>` : ''}`,
@@ -536,7 +574,7 @@ LL.views = {};
         '<span class="subtle" title="No actions until the account joins">\u2014</span>',
       ]);
       const rows = (query.nos || query.dups ? [] : filtered).map((u) => [
-        who216(map, u.id, u.display_name || u.username, '@' + (u.username || ''), { online: num(u.online_devices) > 0, size: 32 }),
+        who216(map, u.id, ui.name276(u), '@' + (u.username || ''), { online: num(u.online_devices) > 0, size: 32 }),
         u.admin_role ? ui.pill216(ui.LEVELS_216[u.admin_role] || u.admin_role, 'gold') : '<span class="subtle">\u2014</span>',
         `<span>${fmt.number(u.devices)}</span>`,
         status216(u.status),
@@ -622,7 +660,7 @@ LL.views = {};
       const dev = String(d.device_id || '');
       const short = dev.length > 8 ? '\u2026' + dev.slice(-6) : dev;
       return [
-        ui.person216({ userId: '', name: d.new_name || d.new_username || '\u2014', sub: `@${d.new_username || ''} \u00b7 not on server`, size: 32 }),
+        ui.person216({ userId: '', name: ui.name276({ display_name: d.new_name, username: d.new_username }), sub: `@${d.new_username || ''} \u00b7 not on server`, size: 32 }),
         `<span>${ui.esc(d.device_name || 'Phone')}</span><div class="type-caption">${ui.esc(short)} \u00b7 same hardware</div>`,
         who216(map, d.old_user_id, d.old_name || old.display_name || d.old_username, `@${d.old_username || old.username || ''}${old.devices ? ' \u00b7 ' + fmt.number(old.devices) + (num(old.devices) === 1 ? ' phone' : ' phones') : ''}`, { size: 32 }),
         `${ui.pill216('Blocked \u00b7 waiting', 'orange')}<div class="type-caption">Tried to join ${ui.esc(ui.when216(d.last_seen))}${num(d.tries) > 1 ? ' \u00b7 ' + fmt.number(d.tries) + ' tries' : ''}</div>`,
@@ -691,7 +729,7 @@ LL.views = {};
     if (!host) return;
     const owner = ctx.can('manageUsers');
     const canRule = ctx.can('manageNetworkPolicy');
-    const name = u.display_name || u.username || '';
+    const name = ui.name276(u);
     const data = `data-user-admin="${ui.esc(u.id)}" data-user-name="${ui.esc(name)}" data-user-role="${ui.esc(u.admin_role || '')}"`;
     const levels = [
       ['', 'Not admin', 'Normal user'],
@@ -774,7 +812,7 @@ LL.views = {};
       const manage = ctx.can('manageDevices');
       const rows = filtered.map((d) => [
         `<div class="p216-t"><b>${emptyText(d.name)}</b><small>${emptyText(d.platform)}</small></div>`,
-        d.user_id ? who216(map, d.user_id, d.display_name || d.username, '@' + (d.username || ''), { size: 28 }) : '<span class="subtle">\u2014</span>',
+        d.user_id ? who216(map, d.user_id, ui.name276(d), '@' + (d.username || ''), { size: 28 }) : '<span class="subtle">\u2014</span>',
         linkNow216(d),
         `<span>${ui.esc(d.online ? 'Online now' : ui.when216(d.last_seen_at))}</span>`,
         `<span>${d.app_build ? `build ${ui.esc(d.app_build)}` : '\u2014'}</span>`,
@@ -830,7 +868,7 @@ LL.views = {};
         return ui.table({
           columns: [{ label: 'Person' }, { label: 'Phone' }, { label: 'Since' }, { label: 'Last used' }, { label: '' }],
           rows: list.map((s) => [
-            who216(map, s.user_id, s.display_name || s.username, '@' + (s.username || ''), { size: 28 }),
+            who216(map, s.user_id, ui.name276(s), '@' + (s.username || ''), { size: 28 }),
             emptyText(s.device_name),
             `<span>${ui.esc(fmt.dateTime(s.created_at))}</span>`,
             `<span>${ui.esc(ui.when216(s.last_seen_at))}</span>`,
@@ -873,36 +911,70 @@ LL.views = {};
       el.innerHTML = ui.skeletonPanel(5);
       const [links, net] = await Promise.all([settle(ctx.api('/api/v1/admin/link-map')), settle(ctx.api('/api/v1/admin/network'))]);
       if (!links.ok) { el.innerHTML = ui.panel({ title: 'Network & mesh', body: ui.errorState(links.error, 'network') }); return; }
-      const nodes = Array.isArray(links.data.nodes) ? links.data.nodes : [];
-      const edges = Array.isArray(links.data.edges) ? links.data.edges : [];
+      const data = net.ok ? net.data : {};
+      this.draw(el, ctx, links.data, data);
+      // Bundle 274 (W-1): redraw on every live frame while this page is open.
+      if (el.isConnected) {
+        ctx.live((msg) => {
+          if (ctx.state.view !== 'network' || !el.isConnected) return;
+          this.draw(el, ctx, msg, data);
+        });
+      }
+    },
+    // Bundle 272 (Part C): tiles count real links (N-1), "Link now" shows the
+    // server AND the local way (N-2), Local Wi-Fi tile + the way next to each
+    // name in "Linked with" (N-3). Names never show the phone's default name (276).
+    draw(el, ctx, linkData, data) {
+      const nodes = Array.isArray(linkData.nodes) ? linkData.nodes : [];
+      const edges = Array.isArray(linkData.edges) ? linkData.edges : [];
       const byId = {};
       nodes.forEach((n) => { byId[n.device_id] = n; });
-      const nameOf = (n) => n.display_name || n.username || n.device_name || 'Phone';
-      const peers = (id) => edges.filter((e) => e.from !== 'server' && (e.from === id || e.to === id))
-        .map((e) => byId[e.from === id ? e.to : e.from]).filter(Boolean).map(nameOf);
+      const nameOf = (n) => ui.name276(n);
+      const WAY = { lan: 'Wi-Fi', wifi_direct: 'Wi-Fi Direct', mesh: 'Mesh' };
+      const localEdges = (id) => edges.filter((e) => e.from !== 'server' && e.to !== 'server' && (e.from === id || e.to === id) && WAY[e.link]);
+      const peers = (id) => localEdges(id).map((e) => {
+        const other = byId[e.from === id ? e.to : e.from];
+        return other ? `${nameOf(other)} (${WAY[e.link]})` : '';
+      }).filter(Boolean);
+      const waysOf = (id) => {
+        const out = [];
+        localEdges(id).forEach((e) => { if (out.indexOf(e.link) < 0) out.push(e.link); });
+        return out;
+      };
       const reached = nodes.filter((n) => n.online || n.link);
-      const count = (k) => nodes.filter((n) => n.link === k).length;
-      const data = net.ok ? net.data : {};
+      const hasWay = (n, k) => n.link === k || waysOf(n.device_id).indexOf(k) >= 0;
+      const count = (k) => nodes.filter((n) => hasWay(n, k)).length;
       const tile = (label, value, color) => `<div class="tile216"><small>${ui.esc(label)}</small><b style="color:${color}">${ui.esc(fmt.number(value))}</b></div>`;
+      const L = ui.LINKS_216;
       el.innerHTML = `
         <div class="section">
+          <div class="bar216" style="justify-content:flex-end;margin:0 0 8px">${ctx.liveBadge ? ctx.liveBadge() : ''}</div>
           <div class="tiles216">
             ${tile('Phones online', reached.length, 'var(--text-primary)')}
-            ${tile('On the server', count('server'), '#4ade80')}
-            ${tile('Wi-Fi Direct', Math.max(count('wifi_direct'), num(data.wifi_direct_connected)), '#fbbf24')}
-            ${tile('Mesh', Math.max(count('mesh'), num(data.mesh_available)), '#b49cff')}
+            ${tile('On the server', nodes.filter((n) => n.online).length, L.server.color)}
+            ${tile('Local Wi-Fi', count('lan'), L.lan.color)}
+            ${tile('Wi-Fi Direct', Math.max(count('wifi_direct'), num(data.wifi_direct_connected)), L.wifi_direct.color)}
+            ${tile('Mesh', count('mesh'), L.mesh.color)}
           </div>
           ${ui.panel({
             title: 'Phones right now',
             body: reached.length ? ui.table({
               columns: [{ label: 'Phone' }, { label: 'Owner' }, { label: 'Link now' }, { label: 'Linked with' }],
               rows: reached.map((n) => {
-                const l = n.blocked ? null : ui.LINKS_216[n.link];
+                const local = waysOf(n.device_id);
+                let way;
+                if (n.blocked) way = ui.pill216('Blocked', 'red');
+                else {
+                  // "Server + Wi-Fi": the server first, then every local way.
+                  const keys = n.online ? ['server'] : (n.link && L[n.link] ? [n.link] : []);
+                  local.forEach((k) => { if (keys.indexOf(k) < 0 && L[k]) keys.push(k); });
+                  way = keys.length ? keys.map((k) => ui.pill216(L[k].label, L[k].tone)).join(' ') : ui.pill216('Offline', 'grey');
+                }
                 const with216 = peers(n.device_id);
                 return [
-                  `<b>${emptyText(n.device_name)}</b>`,
+                  `<b>${ui.esc(ui.phone276(n.device_name, nameOf(n)))}</b>`,
                   ui.person216({ userId: n.user_id, name: nameOf(n), hasAvatar: n.has_avatar, admin: !!n.admin_role, blocked: n.blocked, size: 28 }),
-                  n.blocked ? ui.pill216('Blocked', 'red') : (l ? ui.pill216(l.label, l.tone) : ui.pill216('Offline', 'grey')),
+                  way,
                   with216.length ? ui.esc(with216.join(', ')) : '<span class="subtle">\u2014</span>',
                 ];
               }),
@@ -910,6 +982,7 @@ LL.views = {};
           })}
           <div class="row gap-sm"><button class="btn btn-sm" data-nav="map">Open map \u203a</button></div>
         </div>`;
+      if (ctx.liveSync) ctx.liveSync();
     },
   };
 
@@ -995,7 +1068,7 @@ LL.views = {};
     const out = [];
     const failed = {};
     events.forEach((e) => {
-      const who = e.username ? '@' + e.username : (e.display_name || '');
+      const who = ui.name276(e); // Bundle 276: name first, username without @
       const when = fmt.dateTime(e.created_at);
       const phone = e.device_name ? ` \u00b7 ${e.device_name}` : '';
       const a = String(e.action || '');
@@ -1168,7 +1241,7 @@ LL.views = {};
       // code (waits with no time limit; Approve gives a short code to read out).
       const noCode222 = (r) => r.kind === 'no_code';
       const card = (r) => ui.panel({
-        body: `<div class="map216-row">${who216(map, r.user_id, r.display_name || r.username, `@${r.username || ''} \u00b7 ${noCode222(r) ? 'phone' : 'new phone'}: ${r.target_device_name || '\u2014'}`, { size: 40 })}
+        body: `<div class="map216-row">${who216(map, r.user_id, ui.name276(r), `@${r.username || ''} \u00b7 ${noCode222(r) ? 'phone' : 'new phone'}: ${r.target_device_name || '\u2014'}`, { size: 40 })}
             ${noCode222(r) ? ui.pill216('No code', 'orange') : ui.pill216('Waiting', 'orange')}</div>
           <div class="type-caption" style="margin:6px 0 10px">Asked ${ui.esc(fmt.dateTime(r.created_at))} \u00b7 ${noCode222(r) ? 'forgot password, no recovery code \u00b7 waits until you answer' : 'ends ' + ui.esc(fmt.dateTime(r.expires_at))}</div>
           ${can ? `<textarea class="input" data-reason-for="${ui.esc(r.id)}" rows="2" maxlength="200" placeholder="Reason (only if you reject)" style="width:100%;height:auto;padding:8px"></textarea>
@@ -1193,7 +1266,7 @@ LL.views = {};
                 const t = tone[String(r.status || '').toLowerCase()] || [fmt.titleCase(r.status || ''), 'grey'];
                 const k = kind222[r.kind || 'move'] || kind222.move;
                 const done = r.kind === 'reset_code' ? '<span class="type-caption">Done by the user (audit only)</span>' : ui.pill216(t[0], t[1]);
-                return [who216(map, r.user_id, r.display_name || r.username, '@' + (r.username || ''), { size: 28 }),
+                return [who216(map, r.user_id, ui.name276(r), '@' + (r.username || ''), { size: 28 }),
                   ui.pill216(k[0], k[1]), emptyText(r.target_device_name), `<span>${ui.esc(fmt.dateTime(r.created_at))}</span>`, done];
               }),
             }),
@@ -1271,9 +1344,10 @@ LL.views = {};
     group: 'Network',
     isNew: true,
     async refresh(el, ctx) { await this.mount(el, ctx, true); return true; },
-    async mount(el, ctx, quiet) {
+    async mount(el, ctx, quiet, liveData) {
       if (!quiet) el.innerHTML = ui.bootSkeleton219('map'); // Bundle 219
-      const result = await settle(ctx.api('/api/v1/admin/link-map'));
+      // Bundle 274: a live frame brings the map itself (no extra request).
+      const result = liveData ? { ok: true, data: liveData } : await settle(ctx.api('/api/v1/admin/link-map'));
       if (!result.ok) { el.innerHTML = ui.panel({ title: 'Map', body: ui.errorState(result.error, 'map') }); return; }
       const nodes = Array.isArray(result.data.nodes) ? result.data.nodes : [];
       const edges = Array.isArray(result.data.edges) ? result.data.edges : [];
@@ -1284,11 +1358,22 @@ LL.views = {};
         const c = count(k);
         if (c || k === 'server') chips.push({ value: k, label: `${label} ${c}` });
       });
+      mapView.last = result.data;
       const pos = layout216(nodes, edges);
+      // Bundle 274 (W-2): a redraw keeps phones where they were (same online
+      // state); only new phones get a new spot, only the lines change.
+      const keep = mapView.pos || {};
+      nodes.forEach((n) => { const o = keep[n.device_id]; if (o && o.online === !!n.online) pos[n.device_id] = { x: o.x, y: o.y }; });
+      mapView.pos = {};
+      nodes.forEach((n) => { const q = pos[n.device_id]; if (q) mapView.pos[n.device_id] = { x: q.x, y: q.y, online: !!n.online }; });
       const shown = (n) => mapView.filter === 'all' || linkOf(n) === mapView.filter;
       // Bundle 217: aerial (flight-path) lines that bow away from the centre.
       const allPts = nodes.map((n) => pos[n.device_id]).filter(Boolean).concat([pos.server]);
       const C = allPts.reduce((a, p) => ({ x: a.x + p.x / allPts.length, y: a.y + p.y / allPts.length }), { x: 0, y: 0 });
+      // Bundle 272 (M-3): phone<->phone lines bow away from the centre of the
+      // phones only, with a smaller bow; server lines are unchanged.
+      const phonePts = nodes.map((n) => pos[n.device_id]).filter(Boolean);
+      const CP = phonePts.length ? phonePts.reduce((a, p) => ({ x: a.x + p.x / phonePts.length, y: a.y + p.y / phonePts.length }), { x: 0, y: 0 }) : C;
       const lines = edges.map((e, i) => {
         const p = pos[e.from]; const q = pos[e.to];
         if (!p || !q) return '';
@@ -1296,7 +1381,7 @@ LL.views = {};
         const from = nodes.find((n) => n.device_id === e.from) || {};
         const blocked = !!(to.blocked || from.blocked);
         const dim = !(mapView.filter === 'all' || (shown(to) && (e.from === 'server' || shown(from))));
-        const d = arc217(p, q, C, 0.60);
+        const d = e.from === 'server' ? arc217(p, q, C, 0.60) : arc217(p, q, CP, 0.25);
         if (blocked) {
           return `<g class="link217 blocked${dim ? ' dim' : ''}"><path class="base" d="${d}"/></g>`;
         }
@@ -1311,9 +1396,9 @@ LL.views = {};
       nodes.forEach((n) => { if (n.user_id) people[n.user_id] = true; });
       const nodeHtml = nodes.map((n) => {
         const p = pos[n.device_id];
-        const name = n.display_name || n.username || n.device_name || 'Phone';
+        const name = ui.name276(n); // Bundle 276
         const cls = ['map216-node', shown(n) ? '' : 'dim', mapView.pick && mapView.pick === n.user_id ? 'sel' : ''].join(' ');
-        return `<div class="${cls}" style="left:${p.x}px;top:${p.y}px" data-map-pick="${ui.esc(n.user_id || '')}" title="${ui.esc(n.device_name || '')}">
+        return `<div class="${cls}" style="left:${p.x}px;top:${p.y}px" data-map-pick="${ui.esc(n.user_id || '')}" title="${ui.esc(ui.phone276(n.device_name, name))}">
           ${ui.avatar216({ userId: n.user_id, name, hasAvatar: n.has_avatar, admin: !!n.admin_role, blocked: n.blocked, size: 48 })}
           <span class="tag">${ui.esc(name)}</span></div>`;
       }).join('');
@@ -1323,7 +1408,7 @@ LL.views = {};
         + (nodes.some((n) => n.blocked) ? '<span><i class="dash217"></i>Blocked \u00b7 relays only</span>' : '');
       el.innerHTML = `
         <div class="section">
-          <div class="bar216">${ui.chips216(chips, mapView.filter, 'data-map-filter')}</div>
+          <div class="bar216">${ui.chips216(chips, mapView.filter, 'data-map-filter')}${ctx.liveBadge ? ctx.liveBadge() : ''}</div>
           <div class="map216">
             <div class="map217-wrap">
             <div class="map216-stage" data-map-stage>
@@ -1344,7 +1429,7 @@ LL.views = {};
                   const k = linkOf(n);
                   const pill = k === 'blocked' ? ui.pill216('Blocked', 'red')
                     : (ui.LINKS_216[k] ? ui.pill216(ui.LINKS_216[k].label, ui.LINKS_216[k].tone) : ui.pill216('Offline', 'grey'));
-                  return `<div class="map216-row">${ui.person216({ userId: n.user_id, name: n.display_name || n.username || n.device_name, sub: n.device_name, hasAvatar: n.has_avatar, admin: !!n.admin_role, blocked: n.blocked, size: 30 })}${pill}</div>`;
+                  return `<div class="map216-row">${ui.person216({ userId: n.user_id, name: ui.name276(n), sub: ui.phone276(n.device_name, ui.name276(n)), hasAvatar: n.has_avatar, admin: !!n.admin_role, blocked: n.blocked, size: 30 })}${pill}</div>`;
                 }).join('')}
                 <div class="type-caption" style="margin-top:14px">${mapView.pick ? '<a href="#" data-map-pick="">Show everyone</a>' : 'Click a person to see their phones.'}</div></div>`,
             })}
@@ -1401,6 +1486,8 @@ LL.views = {};
         pinch = null;
         if (pts.size === 1) startDrag(); else if (pts.size === 0) { drag = null; stage.classList.remove('drag'); }
         else startPinch();
+        // Bundle 274: a live frame that came during a drag is drawn now.
+        if (pts.size === 0 && mapView.pendingLive) { const m = mapView.pendingLive; mapView.pendingLive = null; this.mount(el, ctx, true, m); }
       };
       stage.addEventListener('pointerup', lift);
       stage.addEventListener('pointercancel', lift);
@@ -1440,14 +1527,24 @@ LL.views = {};
         resizeTimer = setTimeout(() => { if (!mapView.fitted && stage.isConnected) fit(); }, 150);
       };
       window.addEventListener('resize', mapView.offResize);
-      el.querySelectorAll('[data-map-filter]').forEach((b) => b.addEventListener('click', () => { mapView.filter = b.getAttribute('data-map-filter'); mapView.fitted = false; this.mount(el, ctx, true); }));
+      el.querySelectorAll('[data-map-filter]').forEach((b) => b.addEventListener('click', () => { mapView.filter = b.getAttribute('data-map-filter'); mapView.fitted = false; this.mount(el, ctx, true, mapView.last); }));
       el.querySelectorAll('[data-map-pick]').forEach((b) => b.addEventListener('click', (ev) => {
         ev.preventDefault();
         const id = b.getAttribute('data-map-pick');
         mapView.pick = id && mapView.pick !== id ? id : '';
-        this.mount(el, ctx, true);
+        this.mount(el, ctx, true, mapView.last);
       }));
       if (!quiet || !mapView.fitted) fit();
+      // Bundle 274 (W-1): redraw on every live frame while the Map is open.
+      if (!quiet && !liveData && el.isConnected) {
+        ctx.live((msg) => {
+          if (ctx.state.view !== 'map' || !el.isConnected) return;
+          const st = el.querySelector('[data-map-stage]');
+          if (st && st.classList.contains('drag')) { mapView.pendingLive = msg; return; }
+          this.mount(el, ctx, true, msg);
+        });
+      }
+      if (ctx.liveSync) ctx.liveSync();
     },
   };
 
@@ -1610,7 +1707,7 @@ LL.views = {};
       el.innerHTML = '';
       el.appendChild(root);
 
-      const personName = (p) => p.username || p.name || p.id || '—';
+      const personName = (p) => ui.name276({ display_name: p.name && p.name !== p.id ? p.name : '', username: p.username }); // Bundle 276
       const threadTitle = (row) => {
         if (row.kind === 'group') return row.group_name || row.group_id;
         const people = (row.participants || []).map(personName);
@@ -1689,7 +1786,7 @@ LL.views = {};
       function bubbleThread(messages) {
         return `<div class="chat-thread">${messages.map((m) => {
           const side = sideFor(m.sender_id);
-          const author = m.sender_name || m.sender_id || '—';
+          const author = ui.name276({ display_name: m.sender_name, username: m.sender_username }); // Bundle 276
           const attachments = Array.isArray(m.attachments) ? m.attachments : [];
           return `<div class="chat-row ${side}">
             <div class="chat-bubble ${side}">
@@ -1783,7 +1880,7 @@ LL.views = {};
       }
 
       // Display name first in the new list ("Sajjad & Sumaira").
-      const shownName = (p) => (p.name && p.name !== p.id ? p.name : (p.username || p.id || '\u2014'));
+      const shownName = (p) => ui.name276({ display_name: p.name && p.name !== p.id ? p.name : '', username: p.username }); // Bundle 276
       const ROUTE221 = { server: 'Server', direct: 'Wi-Fi Direct', wifi_direct: 'Wi-Fi Direct', mesh: 'Mesh', lan: 'Local Wi-Fi' };
 
       function chatKey(c) {
@@ -1857,7 +1954,7 @@ LL.views = {};
             kind = 'direct';
             const people = r.participants || [];
             who = people.map(shownName).join(' & ');
-            sub = people.map((p) => '@' + (p.username || p.name || p.id)).join(' \u00b7 ');
+            sub = people.filter((p) => p.username).map((p) => '@' + p.username).join(' \u00b7 ');
             avatars = `<span class="pair221">${people.slice(0, 2).map((p) => ui.avatar216({ name: shownName(p), size: 28 })).join('')}</span>`;
           } else {
             kind = q.chat.kind;
@@ -1964,7 +2061,7 @@ LL.views = {};
               <button type="button" class="danger" data-conv221-delmsg="${i}">Delete completely</button>
             </div>` : '';
         return `<div class="chat-row ${side}"><div class="${cls}">
-            <div class="head221"><b class="who221">${ui.esc(m.sender_name || 'Phone')}</b>${route}<span class="t221">${ui.esc(time12(m.created_at))}</span>
+            <div class="head221"><b class="who221">${ui.esc(ui.name276({ display_name: m.sender_name, username: m.sender_username }))}</b>${route}<span class="t221">${ui.esc(time12(m.created_at))}</span>
               <button class="kebab221" type="button" data-conv221-menu="${i}" aria-label="Message menu"><i></i><i></i><i></i></button></div>
             ${m.body ? `<div class="chat-body">${ui.esc(m.body)}</div>` : ''}
             ${(Array.isArray(m.attachments) ? m.attachments : []).map((a) => att221(a, m)).join('')}
@@ -2082,7 +2179,7 @@ LL.views = {};
         const s = scope.sheet;
         if (!s) return '';
         const option = (list, value, label) => list.map((x) => `<option value="${ui.esc(x.id)}" ${x.id === value ? 'selected' : ''}>${ui.esc(label(x))}</option>`).join('');
-        const userLabel = (u) => (u.display_name ? `${u.display_name} (@${u.username})` : '@' + u.username);
+        const userLabel = (u) => { const n = ui.name276(u); return u.username && n !== u.username ? `${n} (@${u.username})` : n; }; // Bundle 276
         let who;
         if (s.fixed) {
           who = `<div class="fixed221"><b>${ui.esc(s.fixed.label)}</b><small>${s.fixed.kind === 'group' ? 'Group' : 'Private chat'}</small></div>`;

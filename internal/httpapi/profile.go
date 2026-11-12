@@ -44,7 +44,7 @@ type Profile struct {
 }
 
 func (a *API) ensureProfile(userID, username, displayName, now string) error {
-	if strings.TrimSpace(displayName) == "" {
+	if strings.TrimSpace(displayName) == "" || isDefaultPhoneName276(displayName) {
 		displayName = username
 	}
 	_, err := a.store.DB().Exec(`INSERT INTO profiles(user_id,display_name,avatar_path,avatar_content_type,avatar_size,avatar_sha256,avatar_updated_at,created_at,updated_at)
@@ -134,9 +134,8 @@ func (a *API) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	displayName := strings.TrimSpace(in.DisplayName)
-	if displayName == "" {
-		displayName = currentUsername
-	}
+	// Bundle 276: a default phone name ("My Android Phone (xxxx)") from an old
+	// app is not a person's name - the username is saved instead.
 	if len(displayName) > maxDisplayNameLen || hasControlChars(displayName) {
 		writeError(w, http.StatusBadRequest, "invalid display name")
 		return
@@ -148,6 +147,9 @@ func (a *API) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	if !validUsername(username) {
 		writeError(w, http.StatusBadRequest, "invalid username")
 		return
+	}
+	if displayName == "" || isDefaultPhoneName276(displayName) {
+		displayName = username // the (new) username, never the phone name
 	}
 	phoneInput := ""
 	if in.PhoneNumber != nil {

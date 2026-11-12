@@ -147,7 +147,7 @@ func TestAdminCallsSecurityAndLogsShowNames216(t *testing.T) {
 
 	calls := s.get(t, s.api.AdminCalls, "/api/v1/admin/calls")
 	c := findRow216(t, calls, "calls", "id", "call216")
-	if c["caller_name"] != "Ali Raza" || c["callee_name"] != "dev-bilal-216" || c["caller_user_id"] != s.ali.Account.ID {
+	if c["caller_name"] != "Ali Raza" || c["callee_name"] != "bilal216" /* Bundle 276: username, not the phone name */ || c["caller_user_id"] != s.ali.Account.ID {
 		t.Fatalf("call row = %v", c)
 	}
 	sec := s.get(t, s.api.AdminSecurityEvents, "/api/v1/admin/security-events")

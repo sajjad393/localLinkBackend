@@ -1130,7 +1130,7 @@ td { height: 52px; border-bottom: 1px solid var(--border); }
 
 /* W3 map */
 .map216 { display: grid; grid-template-columns: minmax(0, 1fr) 276px; gap: 12px; }
-.map216-stage { position: relative; height: clamp(320px, 52vh, 620px); overflow: hidden; border-radius: 12px; border: 1px solid var(--border); background: #0b0f14; background-image: radial-gradient(#1c232d 1px, transparent 1px); background-size: 22px 22px; cursor: grab; touch-action: none; }
+.map216-stage { position: relative; height: clamp(320px, 52vh, 620px); overflow: hidden; border-radius: 12px; border: 1px solid var(--border); background: #0b0f14; background-image: radial-gradient(#1c232d 1px, transparent 1px); background-size: 22px 22px; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
 .map216-stage.drag { cursor: grabbing; }
 .map216-world { position: absolute; left: 0; top: 0; width: 1000px; height: 700px; transform-origin: 0 0; }
 .map216-world > svg { position: absolute; left: 0; top: 0; overflow: visible; }
@@ -1482,3 +1482,9 @@ td { height: 52px; border-bottom: 1px solid var(--border); }
 .code222 { margin: 12px 0; padding: 14px; border-radius: 10px; background: var(--surface-2, #1b2029); font: 600 22px/1.2 ui-monospace, Menlo, Consolas, monospace; letter-spacing: 2px; text-align: center; word-break: break-all; }
 :root:not([data-theme="dark"]) .code222 { background: #f2f4f7; }
 .nos222 { margin-top: 4px; }
+
+/* Bundle 274: live dot next to the Map / Network / Live network titles. */
+.live274 { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text-secondary); white-space: nowrap; }
+.live274 i { width: 8px; height: 8px; border-radius: 50%; background: #98a2b3; display: inline-block; }
+.live274.on { color: #4ade80; }
+.live274.on i { background: #4ade80; box-shadow: 0 0 0 3px rgba(74, 222, 128, .18); }

@@ -267,7 +267,7 @@ func (a *API) GroupMembers(w http.ResponseWriter, r *http.Request) {
 	// device label ("My Android Phone (xxxx)"): join through devices -> users
 	// -> profiles and only fall back to the device name when no profile
 	// nickname exists at all.
-	rows, err := a.store.DB().Query(`SELECT gm.group_id,gm.device_id,gm.role,gm.joined_at,COALESCE(NULLIF(TRIM(p.display_name),''),d.name),gm.added_by,COALESCE(d.user_id,'') FROM group_members gm JOIN devices d ON d.id=gm.device_id LEFT JOIN profiles p ON p.user_id=d.user_id WHERE gm.group_id=? ORDER BY gm.role DESC,COALESCE(NULLIF(TRIM(p.display_name),''),d.name) COLLATE NOCASE`, gid)
+	rows, err := a.store.DB().Query(`SELECT gm.group_id,gm.device_id,gm.role,gm.joined_at,`+memberNameSQL+`,gm.added_by,COALESCE(d.user_id,'') FROM group_members gm JOIN devices d ON d.id=gm.device_id LEFT JOIN profiles p ON p.user_id=d.user_id WHERE gm.group_id=? ORDER BY gm.role DESC,`+memberNameSQL+` COLLATE NOCASE`, gid)
 	if err != nil {
 		writeError(w, 500, "failed to list members")
 		return

@@ -111,6 +111,7 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 	if d, changed := a.setPresence(deviceID, true, false, DevicePresence{}); changed {
 		a.broadcastPresence(deviceID, d)
 	}
+	a.linkMapChanged274() // Bundle 274: live admin map (joined)
 	defer func() {
 		a.hub.Remove(deviceID, client)
 		client.Close()
@@ -118,6 +119,7 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 			d, _ := a.setPresence(deviceID, false, false, DevicePresence{})
 			a.broadcastPresence(deviceID, d)
 		}
+		a.linkMapChanged274() // Bundle 274: live admin map (left)
 	}()
 
 	_ = client.WriteText(mustJSON(WSMessage{Type: "ready", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}))

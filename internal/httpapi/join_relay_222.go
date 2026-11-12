@@ -213,7 +213,7 @@ func (a *API) applyJoinBox222(b joinBoxBody222, carrier string) joinAnswerBody22
 		platform = "android"
 	}
 	display := strings.TrimSpace(b.DisplayName)
-	if display == "" {
+	if display == "" || isDefaultPhoneName276(display) { // Bundle 276
 		display = username
 	}
 	// Bundle 236 (B4): a box from an account made offline needs no pairing code.

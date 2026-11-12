@@ -448,6 +448,7 @@ func (a *API) AdminRecoveryRequests(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, "failed to read recovery requests")
 			return
 		}
+		x.TargetDeviceName = phoneLabel276(x.TargetDeviceName, x.Username) // Bundle 276
 		out = append(out, x)
 	}
 	if err := rows.Err(); err != nil {

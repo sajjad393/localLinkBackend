@@ -152,8 +152,8 @@ func (a *API) deviceLabels(ids []string) (map[string]conversationParticipant, er
 		args = append(args, id)
 	}
 	rows, err := a.store.DB().Query(
-		`SELECT d.id, COALESCE(u.username,''), COALESCE(d.name,'')
-		 FROM devices d LEFT JOIN users u ON u.id = d.user_id
+		`SELECT d.id, COALESCE(u.username,''), COALESCE(p.display_name,'')
+		 FROM devices d LEFT JOIN users u ON u.id = d.user_id LEFT JOIN profiles p ON p.user_id = d.user_id
 		 WHERE d.id IN (`+placeholders+`)`, args...)
 	if err != nil {
 		return nil, err
@@ -164,9 +164,7 @@ func (a *API) deviceLabels(ids []string) (map[string]conversationParticipant, er
 		if err := rows.Scan(&p.ID, &p.Username, &p.Name); err != nil {
 			return nil, err
 		}
-		if p.Name == "" {
-			p.Name = p.ID
-		}
+		p.Name = personName276(p.Name, p.Username) // Bundle 276: never the phone name
 		out[p.ID] = p
 	}
 	return out, rows.Err()
@@ -341,7 +339,7 @@ func (a *API) AdminConversation(w http.ResponseWriter, r *http.Request) {
 	}
 	args = append(args, params.Limit+1)
 	rows, err := a.store.DB().Query(`
-SELECT m.id,m.sender_id,COALESCE(sd.name,''),COALESCE(su.username,''),m.recipient_id,m.body,m.created_at,m.status,COALESCE(m.delivered_at,''),COALESCE(m.server_seq,0)
+SELECT m.id,m.sender_id,COALESCE((SELECT sp.display_name FROM profiles sp WHERE sp.user_id=sd.user_id),''),COALESCE(su.username,''),m.recipient_id,m.body,m.created_at,m.status,COALESCE(m.delivered_at,''),COALESCE(m.server_seq,0)
 FROM messages m
 LEFT JOIN devices sd ON sd.id = m.sender_id
 LEFT JOIN users su ON su.id = sd.user_id
@@ -359,9 +357,7 @@ ORDER BY m.created_at DESC, m.id DESC LIMIT ?`, args...)
 			writeError(w, 500, "failed to read message")
 			return
 		}
-		if m.SenderName == "" {
-			m.SenderName = m.SenderID
-		}
+		m.SenderName = personName276(m.SenderName, m.SenderUsername) // Bundle 276
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -444,7 +440,7 @@ func (a *API) AdminGroupConversation(w http.ResponseWriter, r *http.Request) {
 	}
 	args = append(args, params.Limit+1)
 	rows, err := a.store.DB().Query(`
-SELECT gm.id,gm.sender_id,COALESCE(sd.name,''),COALESCE(su.username,''),gm.body,gm.created_at,gm.server_seq
+SELECT gm.id,gm.sender_id,COALESCE((SELECT sp.display_name FROM profiles sp WHERE sp.user_id=sd.user_id),''),COALESCE(su.username,''),gm.body,gm.created_at,gm.server_seq
 FROM group_messages gm
 LEFT JOIN devices sd ON sd.id = gm.sender_id
 LEFT JOIN users su ON su.id = sd.user_id
@@ -462,9 +458,7 @@ ORDER BY gm.created_at DESC, gm.id DESC LIMIT ?`, args...)
 			writeError(w, 500, "failed to read group message")
 			return
 		}
-		if m.SenderName == "" {
-			m.SenderName = m.SenderID
-		}
+		m.SenderName = personName276(m.SenderName, m.SenderUsername) // Bundle 276
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {

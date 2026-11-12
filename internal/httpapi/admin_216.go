@@ -88,10 +88,7 @@ func (a *API) people216(userIDs []string) map[string]person216 {
 			if rows.Scan(&p.UserID, &p.Username, &p.Display, &avatar) != nil {
 				continue
 			}
-			p.Display = strings.TrimSpace(p.Display)
-			if p.Display == "" {
-				p.Display = p.Username
-			}
+			p.Display = personName276(p.Display, p.Username) // Bundle 276
 			p.HasAvatar = strings.TrimSpace(avatar) != ""
 			out[p.UserID] = p
 		}
@@ -124,6 +121,7 @@ func (a *API) phones216(deviceIDs []string) map[string]phone216 {
 		if p, ok := people[d.UserID]; ok {
 			d.person216 = p
 		}
+		d.DeviceName = phoneLabel276(d.DeviceName, d.Display) // Bundle 276
 		out[id] = d
 	}
 	return out
@@ -276,6 +274,7 @@ func (a *API) enrichDevices216(list []AdminDevice) {
 			list[i].DisplayName = p.Display
 			list[i].HasAvatar = p.HasAvatar
 		}
+		list[i].Name = phoneLabel276(list[i].Name, firstNonEmpty216(list[i].DisplayName, list[i].Username)) // Bundle 276
 		list[i].AppBuild = builds[list[i].ID]
 	}
 }
@@ -289,8 +288,9 @@ func (a *API) enrichSessions216(list []AdminAuthSession) {
 	for i := range list {
 		list[i].DisplayName = people[list[i].UserID].Display
 		if list[i].DisplayName == "" {
-			list[i].DisplayName = list[i].Username
+			list[i].DisplayName = personName276("", list[i].Username)
 		}
+		list[i].DeviceName = phoneLabel276(list[i].DeviceName, list[i].DisplayName) // Bundle 276
 	}
 }
 
@@ -476,6 +476,8 @@ func (a *API) noteNeighbors216(deviceID string, list []Neighbor) {
 	}
 	s := a.linkStore()
 	s.mu.Lock()
+	old, had := s.reports[deviceID]
+	changed := !had || !sameNeighbors274(old.list, clean)
 	s.reports[deviceID] = neighborReport216{at: time.Now(), list: clean}
 	if len(s.reports) > 20000 {
 		cut := time.Now().Add(-neighborTTL216)
@@ -486,6 +488,42 @@ func (a *API) noteNeighbors216(deviceID string, list []Neighbor) {
 		}
 	}
 	s.mu.Unlock()
+	if changed {
+		a.linkMapChanged274() // Bundle 274: a phone's links changed
+	}
+}
+
+// onlineNow274 (Bundle 274 R-3): online = connected to the server now. The
+// "seen in the last 2 min" rule is used only for a phone the server has no
+// live state for (e.g. right after a restart).
+func (a *API) onlineNow274(deviceID string, seenRecently bool) bool {
+	if a.hub != nil && a.hub.HasDevice(deviceID) {
+		return true
+	}
+	a.presenceMu.RLock()
+	p, ok := a.presence[deviceID]
+	a.presenceMu.RUnlock()
+	if ok {
+		return p.ServerConnected && seenRecently
+	}
+	return seenRecently
+}
+
+// sameNeighbors274: same phones with the same link words (any order).
+func sameNeighbors274(a, b []Neighbor) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	m := make(map[string]string, len(a))
+	for _, n := range a {
+		m[n.DeviceID] = n.Link
+	}
+	for _, n := range b {
+		if l, ok := m[n.DeviceID]; !ok || l != n.Link {
+			return false
+		}
+	}
+	return true
 }
 
 type linkNode216 struct {
@@ -563,8 +601,8 @@ func (a *API) linkMap216(now time.Time) ([]linkNode216, []linkEdge216, error) {
 			continue
 		}
 		p := people[x.userID]
-		n := linkNode216{DeviceID: x.id, DeviceName: x.name, UserID: x.userID, Username: p.Username, DisplayName: p.Display,
-			HasAvatar: p.HasAvatar, AdminRole: x.role, Blocked: x.status == "suspended", Online: x.seen >= cutoff}
+		n := linkNode216{DeviceID: x.id, DeviceName: phoneLabel276(x.name, p.Display), UserID: x.userID, Username: p.Username, DisplayName: p.Display,
+			HasAvatar: p.HasAvatar, AdminRole: x.role, Blocked: x.status == "suspended", Online: a.onlineNow274(x.id, x.seen >= cutoff)}
 		if n.Online {
 			n.Link = "server"
 		}

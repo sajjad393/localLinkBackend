@@ -172,7 +172,7 @@ func (a *API) RegisterAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create login session")
 		return
 	}
-	if _, err = tx.Exec(`INSERT INTO profiles(user_id,display_name,avatar_path,avatar_content_type,avatar_size,avatar_sha256,avatar_updated_at,created_at,updated_at) VALUES(?,?,NULL,NULL,0,'',NULL,?,?)`, userID, deviceName, nowText, nowText); err != nil {
+	if _, err = tx.Exec(`INSERT INTO profiles(user_id,display_name,avatar_path,avatar_content_type,avatar_size,avatar_sha256,avatar_updated_at,created_at,updated_at) VALUES(?,?,NULL,NULL,0,'',NULL,?,?)`, userID, username, nowText, nowText); err != nil { // Bundle 276: username, never the phone name
 		writeError(w, http.StatusInternalServerError, "failed to create profile")
 		return
 	}
@@ -392,7 +392,7 @@ func (a *API) LoginAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create login session")
 		return
 	}
-	if _, err = tx.Exec(`INSERT INTO profiles(user_id,display_name,avatar_path,avatar_content_type,avatar_size,avatar_sha256,avatar_updated_at,created_at,updated_at) VALUES(?,?,NULL,NULL,0,'',NULL,?,?) ON CONFLICT(user_id) DO NOTHING`, user.ID, deviceName, nowText, nowText); err != nil {
+	if _, err = tx.Exec(`INSERT INTO profiles(user_id,display_name,avatar_path,avatar_content_type,avatar_size,avatar_sha256,avatar_updated_at,created_at,updated_at) VALUES(?,?,NULL,NULL,0,'',NULL,?,?) ON CONFLICT(user_id) DO NOTHING`, user.ID, user.Username, nowText, nowText); err != nil { // Bundle 276
 		writeError(w, http.StatusInternalServerError, "failed to initialize profile")
 		return
 	}
