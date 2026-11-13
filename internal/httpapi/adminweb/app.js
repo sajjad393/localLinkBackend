@@ -297,7 +297,7 @@
     const host = $('overlays');
     host.innerHTML = `<div class="menu" role="menu" data-overlay="identity">
       <div class="menu-identity menu-identity217">
-        ${ui.avatar216({ userId: session.user_id || '', name: session.username || '?', hasAvatar: !!session.has_avatar, admin: true, size: 40 })}
+        ${ui.avatar216({ userId: session.user_id || '', name: session.username || '?', hasAvatar: !!session.has_avatar, admin: session.role || true, size: 40 })}
         <span class="menu-who"><strong>${ui.esc(session.username || '—')}</strong>
         <span>${ui.esc(fmt.titleCase(session.role))}${session.username ? ' · signed in until you sign out' : ''}</span></span>
       </div>
@@ -807,10 +807,11 @@
     $('identity-role').textContent = fmt.titleCase(session.role || '') || '—';
     $('identity-initial').textContent = session.username ? session.username.charAt(0).toUpperCase() : '?';
     // Bundle 216: every signed-in admin wears crown A next to the name.
+    // TODO 290: in the colour of my admin level.
     $('identity-initial').classList.add('has-crown');
-    if (!document.getElementById('identity-crown')) {
-      $('identity-initial').insertAdjacentHTML('beforeend', `<span id="identity-crown" class="av216-crown">${ui.crown216(15)}</span>`);
-    }
+    const oldCrown = document.getElementById('identity-crown');
+    if (oldCrown) oldCrown.remove();
+    $('identity-initial').insertAdjacentHTML('beforeend', `<span id="identity-crown" class="av216-crown">${ui.crown216(15, session.role)}</span>`);
     const view = LL.views[start] || LL.views.dashboard;
     state.view = start;
     $('crumb-view').textContent = view.title;

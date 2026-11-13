@@ -424,23 +424,37 @@ window.LL = window.LL || {};
     purple: ['#2A2245', '#B49CFF'], teal: ['#0F3330', '#5EEAD4'],
   };
 
-  // Bundle 217: the new crown (same drawing as the app's paintCrown217).
-  // Units: crown width 100, height 88; the viewBox leaves room for pearls.
-  function crown216(width) {
+  // Bundle 217 / TODO 290: the crown (same drawing as the app's paintCrown217).
+  // Since 290 it is crown C ("round soft crown"): units width 100, height 50,
+  // rounded points, no pearls. Each admin level has its own colours; owner
+  // keeps the 217 gold (#FFE985 / #FFC727 / #E09A12 / #EFA300 / #A87400,
+  // gems #E5484D + #3B82F6). Unknown level = gold.
+  const CROWN_290 = {
+    owner: { id: 'cr217', top: '#FFE985', fill: '#FFC727', low: '#E09A12', band: '#EFA300', line: '#A87400', gem: '#E5484D', side: '#3B82F6' },
+    operator: { id: 'cr217-operator', top: '#DBEAFE', fill: '#60A5FA', low: '#2563EB', band: '#1D4ED8', line: '#1E3A8A', gem: '#FBBF24', side: '#E0F2FE' },
+    security: { id: 'cr217-security', top: '#FECACA', fill: '#F87171', low: '#DC2626', band: '#B91C1C', line: '#7F1D1D', gem: '#FBBF24', side: '#FFFFFF' },
+    auditor: { id: 'cr217-auditor', top: '#FFFFFF', fill: '#D5DCE6', low: '#97A3B6', band: '#8C98AB', line: '#4B5565', gem: '#3B82F6', side: '#E0F2FE' },
+  };
+  // TODO 290: 'owner' / 'operator' / 'security' / 'auditor', else 'owner'.
+  function crownRole290(role) {
+    const r = String(role || '').trim().toLowerCase();
+    return CROWN_290[r] ? r : 'owner';
+  }
+  function crown216(width, role) {
     const w = Math.max(10, Math.min(32, Number(width) || 14));
-    return `<svg class="crown216" width="${(w * 1.12).toFixed(1)}" height="${(w * 0.94).toFixed(1)}" viewBox="-6 -6 112 94" aria-label="Admin" role="img">
-      <defs><linearGradient id="cr217" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFE985"/><stop offset=".5" stop-color="#FFC727"/><stop offset="1" stop-color="#E09A12"/></linearGradient></defs>
-      <g stroke="#A87400" stroke-width="3.5" stroke-linejoin="round">
-        <polygon points="10,71.5 3,23.5 30,47.5 50,9.5 70,47.5 97,23.5 90,71.5" fill="url(#cr217)"/>
-        <rect x="8" y="67.5" width="84" height="20" rx="5" fill="#EFA300"/>
-        <circle cx="3" cy="21.5" r="7.5" fill="#FFF1B0"/><circle cx="50" cy="7.5" r="7.5" fill="#FFF1B0"/><circle cx="97" cy="21.5" r="7.5" fill="#FFF1B0"/>
+    const c = CROWN_290[crownRole290(role)];
+    return `<svg class="crown216" width="${(w * 1.12).toFixed(1)}" height="${(w * 0.53).toFixed(1)}" viewBox="-6 -2 112 53" aria-label="Admin" role="img">
+      <defs><linearGradient id="${c.id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c.top}"/><stop offset=".5" stop-color="${c.fill}"/><stop offset="1" stop-color="${c.low}"/></linearGradient></defs>
+      <g stroke="${c.line}" stroke-width="3.5" stroke-linejoin="round">
+        <path d="M9,42 L6,17 Q6,11 11,14 L29,27 L45,7 Q50,1 55,7 L71,27 L89,14 Q94,11 94,17 L91,42 Z" fill="url(#${c.id})"/>
+        <rect x="6" y="37" width="88" height="12" rx="6" fill="${c.band}"/>
       </g>
-      <g stroke="#A87400" stroke-width="1.75">
-        <ellipse cx="50" cy="77.5" rx="6.5" ry="5.5" fill="#E5484D"/>
-        <ellipse cx="27" cy="77.5" rx="4.5" ry="3.8" fill="#3B82F6"/><ellipse cx="73" cy="77.5" rx="4.5" ry="3.8" fill="#3B82F6"/>
+      <g stroke="${c.line}" stroke-width="1.75">
+        <ellipse cx="50" cy="43" rx="5" ry="4.2" fill="${c.gem}"/>
+        <ellipse cx="27" cy="43" rx="3.5" ry="3" fill="${c.side}"/><ellipse cx="73" cy="43" rx="3.5" ry="3" fill="${c.side}"/>
       </g>
-      <circle cx="48.4" cy="75.8" r="1.3" fill="#fff" fill-opacity=".65"/><circle cx="25.9" cy="76.6" r=".9" fill="#fff" fill-opacity=".65"/><circle cx="71.9" cy="76.6" r=".9" fill="#fff" fill-opacity=".65"/>
-      <path d="M20 63.5L14 35.5" stroke="#fff" stroke-opacity=".47" stroke-width="3" stroke-linecap="round"/>
+      <circle cx="48.3" cy="41.5" r="1" fill="#fff" fill-opacity=".65"/><circle cx="25.8" cy="42" r=".7" fill="#fff" fill-opacity=".65"/><circle cx="71.8" cy="42" r=".7" fill="#fff" fill-opacity=".65"/>
+      <path d="M19 31L16 20" stroke="#fff" stroke-opacity=".47" stroke-width="3" stroke-linecap="round"/>
     </svg>`;
   }
 
@@ -458,14 +472,17 @@ window.LL = window.LL || {};
   }
 
   // avatar216({ userId, name, hasAvatar, admin, blocked, online, size })
+  // TODO 290: admin = true or the admin level ('operator' ...): the crown and
+  // the photo ring take that level's colour (true / unknown = owner gold).
   function avatar216(o) {
     const size = Number(o.size) || 32;
-    const cls = ['av216', o.admin ? 'is-admin' : '', o.blocked ? 'is-blocked' : ''].filter(Boolean).join(' ');
+    const role = o.admin ? crownRole290(typeof o.admin === 'string' ? o.admin : '') : '';
+    const cls = ['av216', o.admin ? 'is-admin' : '', o.admin ? `is-admin-${role}` : '', o.blocked ? 'is-blocked' : ''].filter(Boolean).join(' ');
     const photo = o.hasAvatar && o.userId
       ? ` data-avatar-user="${esc(o.userId)}"` : '';
     return `<span class="${cls}" style="--av:${size}px"${photo} title="${esc(o.name || '')}">
       <span class="av216-in">${esc(initials216(o.name))}</span>
-      ${o.admin && !o.blocked ? `<span class="av216-crown">${crown216(size * 0.55)}</span>` : ''}
+      ${o.admin && !o.blocked ? `<span class="av216-crown">${crown216(size * 0.55, role)}</span>` : ''}
       ${o.online ? '<span class="av216-dot"></span>' : ''}
     </span>`;
   }
@@ -534,7 +551,7 @@ window.LL = window.LL || {};
     esc, icon, badge, statusBadge, severityBadge, statusInfo, severityTone, severityIcon, token,
     panel, sectionHead, metricCard, statRow, headline, table, timeline, notificationItem,
     emptyState, errorState, skeletonPanel, skeletonCards, bootSkeleton219, segmented, healthRow, quickAction, note, filterBar,
-    crown216, mix217, avatar216, person216, pill216, chips216, when216, initials216, TONES_216, LEVELS_216, LINKS_216,
+    crown216, crownRole290, mix217, avatar216, person216, pill216, chips216, when216, initials216, TONES_216, LEVELS_216, LINKS_216,
     isDefaultPhoneName276, name276, phone276,
   };
 

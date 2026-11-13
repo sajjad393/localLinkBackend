@@ -14,6 +14,8 @@ LL.views = {};
 
   const ui = LL.ui;
   const fmt = LL.fmt;
+  // TODO 290: the Users level pill has the colour of that level's crown.
+  const LEVEL_TONE_290 = { owner: 'gold', operator: 'blue', security: 'red', auditor: 'grey' };
 
   // ------------------------------------------------------------- small helpers
   async function settle(promise) {
@@ -478,7 +480,7 @@ LL.views = {};
       name: name || u.display_name || u.username || '—',
       sub: sub,
       hasAvatar: !!u.has_avatar,
-      admin: !!u.admin_role,
+      admin: u.admin_role || false,
       blocked: u.status === 'suspended',
     }, extra || {}));
   }
@@ -575,7 +577,7 @@ LL.views = {};
       ]);
       const rows = (query.nos || query.dups ? [] : filtered).map((u) => [
         who216(map, u.id, ui.name276(u), '@' + (u.username || ''), { online: num(u.online_devices) > 0, size: 32 }),
-        u.admin_role ? ui.pill216(ui.LEVELS_216[u.admin_role] || u.admin_role, 'gold') : '<span class="subtle">\u2014</span>',
+        u.admin_role ? ui.pill216(ui.LEVELS_216[u.admin_role] || u.admin_role, LEVEL_TONE_290[ui.crownRole290(u.admin_role)]) : '<span class="subtle">\u2014</span>',
         `<span>${fmt.number(u.devices)}</span>`,
         status216(u.status),
         `<span>${ui.esc(num(u.online_devices) > 0 ? 'Online now' : ui.when216(u.last_seen_at))}</span>`,
@@ -746,7 +748,7 @@ LL.views = {};
         else if (u.admin_role) attrs = `${data} data-admin-mode="level" data-admin-pick="${value}"`;
         else attrs = `${data} data-admin-mode="make" data-admin-pick="${value}"`;
       }
-      return `<button type="button" class="opt216 ${on ? 'on' : ''}" ${attrs}><b>${value ? ui.crown216(12) + ' ' : ''}${ui.esc(label)}</b><small>${ui.esc(help)}</small></button>`;
+      return `<button type="button" class="opt216 ${on ? 'on' : ''}" ${attrs}><b>${value ? ui.crown216(12, value) + ' ' : ''}${ui.esc(label)}</b><small>${ui.esc(help)}</small></button>`;
     };
     const statusCard = (s) => {
       const x = STATUS_216[s];
@@ -761,7 +763,7 @@ LL.views = {};
           <button class="btn btn-icon" data-side216-close aria-label="Close">${ui.icon('i-close')}</button>
         </div>
         <div class="side216-person">
-          ${ui.person216({ userId: u.id, name, sub: '@' + (u.username || ''), hasAvatar: !!u.has_avatar, admin: !!u.admin_role, blocked: u.status === 'suspended', size: 48 })}
+          ${ui.person216({ userId: u.id, name, sub: '@' + (u.username || ''), hasAvatar: !!u.has_avatar, admin: u.admin_role || false, blocked: u.status === 'suspended', size: 48 })}
           ${u.joined_offline_at ? `<span class="tag218">Joined from offline \u00b7 ${ui.esc(joinedDate218(u.joined_offline_at))}</span>` : ''}
         </div>
         <h3>Status</h3>${['active', 'suspended', 'disabled'].map(statusCard).join('')}
@@ -882,7 +884,7 @@ LL.views = {};
         return ui.table({
           columns: [{ label: 'Admin' }, { label: 'Ends' }, { label: 'Since' }, { label: '' }],
           rows: list.map((s) => [
-            ui.person216({ name: s.admin_username || s.username, sub: ui.LEVELS_216[s.role] || fmt.titleCase(s.role || ''), admin: true, size: 28 }),
+            ui.person216({ name: s.admin_username || s.username, sub: ui.LEVELS_216[s.role] || fmt.titleCase(s.role || ''), admin: s.role || true, size: 28 }),
             `<span>${ui.esc(fmt.dateTime(s.expires_at))}</span>`,
             `<span>${ui.esc(fmt.dateTime(s.created_at))}</span>`,
             s.current ? ui.pill216('This one', 'blue')
@@ -973,7 +975,7 @@ LL.views = {};
                 const with216 = peers(n.device_id);
                 return [
                   `<b>${ui.esc(ui.phone276(n.device_name, nameOf(n)))}</b>`,
-                  ui.person216({ userId: n.user_id, name: nameOf(n), hasAvatar: n.has_avatar, admin: !!n.admin_role, blocked: n.blocked, size: 28 }),
+                  ui.person216({ userId: n.user_id, name: nameOf(n), hasAvatar: n.has_avatar, admin: n.admin_role || false, blocked: n.blocked, size: 28 }),
                   way,
                   with216.length ? ui.esc(with216.join(', ')) : '<span class="subtle">\u2014</span>',
                 ];
@@ -1399,7 +1401,7 @@ LL.views = {};
         const name = ui.name276(n); // Bundle 276
         const cls = ['map216-node', shown(n) ? '' : 'dim', mapView.pick && mapView.pick === n.user_id ? 'sel' : ''].join(' ');
         return `<div class="${cls}" style="left:${p.x}px;top:${p.y}px" data-map-pick="${ui.esc(n.user_id || '')}" title="${ui.esc(ui.phone276(n.device_name, name))}">
-          ${ui.avatar216({ userId: n.user_id, name, hasAvatar: n.has_avatar, admin: !!n.admin_role, blocked: n.blocked, size: 48 })}
+          ${ui.avatar216({ userId: n.user_id, name, hasAvatar: n.has_avatar, admin: n.admin_role || false, blocked: n.blocked, size: 48 })}
           <span class="tag">${ui.esc(name)}</span></div>`;
       }).join('');
       const sideList = nodes.filter((n) => !mapView.pick || n.user_id === mapView.pick);
@@ -1429,7 +1431,7 @@ LL.views = {};
                   const k = linkOf(n);
                   const pill = k === 'blocked' ? ui.pill216('Blocked', 'red')
                     : (ui.LINKS_216[k] ? ui.pill216(ui.LINKS_216[k].label, ui.LINKS_216[k].tone) : ui.pill216('Offline', 'grey'));
-                  return `<div class="map216-row">${ui.person216({ userId: n.user_id, name: ui.name276(n), sub: ui.phone276(n.device_name, ui.name276(n)), hasAvatar: n.has_avatar, admin: !!n.admin_role, blocked: n.blocked, size: 30 })}${pill}</div>`;
+                  return `<div class="map216-row">${ui.person216({ userId: n.user_id, name: ui.name276(n), sub: ui.phone276(n.device_name, ui.name276(n)), hasAvatar: n.has_avatar, admin: n.admin_role || false, blocked: n.blocked, size: 30 })}${pill}</div>`;
                 }).join('')}
                 <div class="type-caption" style="margin-top:14px">${mapView.pick ? '<a href="#" data-map-pick="">Show everyone</a>' : 'Click a person to see their phones.'}</div></div>`,
             })}

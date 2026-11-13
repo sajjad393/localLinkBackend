@@ -1115,6 +1115,10 @@ td { height: 52px; border-bottom: 1px solid var(--border); }
 .av216 { --av: 32px; position: relative; flex: 0 0 var(--av); width: var(--av); height: var(--av); border-radius: 50%; background: #262c36; color: #c0c7d1; display: inline-flex; align-items: center; justify-content: center; font: 600 calc(var(--av) * .38) var(--font-sans); background-size: cover; background-position: center; }
 .av216.has-photo .av216-in { visibility: hidden; }
 .av216.is-admin { box-shadow: 0 0 0 1px var(--background), 0 0 0 2.6px #e7b416; }
+/* TODO 290: the photo ring has the colour of the admin level's crown. */
+.av216.is-admin-operator { box-shadow: 0 0 0 1px var(--background), 0 0 0 2.6px #3b82f6; }
+.av216.is-admin-security { box-shadow: 0 0 0 1px var(--background), 0 0 0 2.6px #ef4444; }
+.av216.is-admin-auditor { box-shadow: 0 0 0 1px var(--background), 0 0 0 2.6px #a8b3c2; }
 .av216.is-blocked { filter: grayscale(1); box-shadow: 0 0 0 1px var(--background), 0 0 0 2.6px #f87171; }
 .av216-crown { position: absolute; left: 50%; top: 0; transform: translate(-50%, calc(-100% + .4px)); line-height: 0; pointer-events: none; }
 .av216-dot { position: absolute; right: -1px; bottom: -1px; width: 9px; height: 9px; border-radius: 50%; background: #22c55e; border: 2px solid var(--surface); }
