@@ -178,6 +178,14 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 				a.noteNeighbors216(deviceID, msg.Neighbors)
 				a.noteOfflineSeen222(deviceID, msg.OfflineSeen)
 				continue
+			case linkReportType296:
+				// Bundle 296 (H4): only the proven links of this phone, every
+				// 15 s and at once on a change (no presence relay to peers).
+				if !a.allowLinkReport296(deviceID) {
+					continue
+				}
+				a.noteLinkReport296(deviceID, msg.Neighbors)
+				continue
 			case "call_invite":
 				if strings.TrimSpace(msg.TransportMode) != "offline_mesh" {
 					_ = client.WriteText(mustJSON(WSMessage{Type: "error", CallID: msg.CallID, Error: "only offline_mesh call transport is supported"}))

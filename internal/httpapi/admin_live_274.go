@@ -179,7 +179,8 @@ func (h *liveHub274) count() int {
 	return len(h.subs)
 }
 
-// refreshLoop274: while someone watches, a frame every 30 s too (neighbour
+// refreshLoop274: while someone watches, the map is checked every 5 s and a
+// frame goes out when it changed, and every 30 s anyway (Bundle 296: neighbour
 // reports that age out and the 2 min "seen" rule change without an event).
 func (a *API) refreshLoop274() {
 	h := a.liveHub()
@@ -191,8 +192,11 @@ func (a *API) refreshLoop274() {
 	h.ticking = true
 	h.mu.Unlock()
 	go func() {
-		t := time.NewTicker(liveRefresh274)
+		// Bundle 296 (H4): checked every 5 s, pushed when it changed (and
+		// every 30 s anyway).
+		t := time.NewTicker(liveSweep296)
 		defer t.Stop()
+		last, tick := "", 0
 		for range t.C {
 			if h.count() == 0 {
 				h.mu.Lock()
@@ -200,7 +204,12 @@ func (a *API) refreshLoop274() {
 				h.mu.Unlock()
 				return
 			}
-			a.linkMapChanged274()
+			tick++
+			var push bool
+			last, push = a.sweepTick296(last, tick)
+			if push {
+				a.linkMapChanged274()
+			}
 		}
 	}()
 }

@@ -423,8 +423,11 @@ type Neighbor struct {
 }
 
 const (
-	maxNeighbors216   = 32
-	neighborTTL216    = 4 * time.Minute
+	maxNeighbors216 = 32
+	// Bundle 296 (H4): a phone's link report counts 45 s (was 4 min). The
+	// app sends only proven links every 15 s and at once on a change, so a
+	// living link is never older than ~15 s; 45 s = 3 reports.
+	neighborTTL216    = 45 * time.Second
 	linkMapOnline216  = 2 * time.Minute
 	linkWifiDirect216 = "wifi_direct"
 	linkMesh216       = "mesh"
@@ -624,6 +627,11 @@ func (a *API) linkMap216(now time.Time) ([]linkNode216, []linkEdge216, error) {
 	for _, from := range ids {
 		fi, ok := known[from]
 		if !ok {
+			continue
+		}
+		// Bundle 296 (H4): only a phone on the server now can vouch for its
+		// links (a phone that left may have lost them since).
+		if !nodes[fi].Online {
 			continue
 		}
 		for _, nb := range reports[from].list {
