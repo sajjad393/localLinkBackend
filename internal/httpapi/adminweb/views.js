@@ -1282,6 +1282,13 @@ LL.views = {};
   // from what phones report (216g) plus their server link (216h link-map).
   const mapView = { x: 0, y: 0, k: 1, filter: 'all', pick: '' };
 
+  // Bundle 294 (TODO_294 A): a phone is "reached" when it is on the server or
+  // another phone reaches it (Wi-Fi Direct, mesh, local Wi-Fi). Only phones
+  // nobody reaches go grey under the OFFLINE line.
+  function reach294(n) {
+    return !!(n && (n.online || (n.link && n.link !== 'offline')));
+  }
+
   // Bundle 292 (TODO_292, mock web_map_292): server top centre, online
   // phones in rows under it (130 px apart, a small 26 px bow, a new row when
   // the stage width at 100 % is full), offline phones in rows under an
@@ -1297,8 +1304,8 @@ LL.views = {};
     const W = Math.max(sw, Math.min(Math.max(1, nodes.length), perRow) * GAP + 60 + (stagger ? GAP / 2 : 0));
     const cx = W / 2;
     const pos = { server: { x: cx, y: 58, fixed: true } };
-    const online = nodes.filter((n) => n.online);
-    const offline = nodes.filter((n) => !n.online);
+    const online = nodes.filter((n) => reach294(n)); // Bundle 294
+    const offline = nodes.filter((n) => !reach294(n));
     let y = 58 + 148;
     const put = (list, bow) => {
       let above = [];
@@ -1461,8 +1468,17 @@ LL.views = {};
 
   // B-3: first try the usual bow; if it runs under a third phone (34 px) or
   // lies on another line (middles < 16 px), try the other side / other bows.
-  function route291(p, q, C, ks, first, obstacles, mids) {
+  // Bundle 294 (TODO_294 B-D): an obstacle may carry its own radius (o.r);
+  // drawn = the lines already placed: a try that crosses one, or reaches the
+  // same phone from almost the same side (< 22 deg), loses to one that does not.
+  function cross294(a, b, c, d) {
+    const o = (p1, p2, p3) => (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x);
+    return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0;
+  }
+  function route291(p, q, C, ks, first, obstacles, mids, drawn) {
     const R = 34; const M = 16;
+    const lines294 = drawn || [];
+    const same294 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y) < 1;
     const tries = [];
     ks.forEach((k) => { tries.push({ C, k }); tries.push({ C: flip291(p, q, C), k }); });
     let best = null;
@@ -1470,18 +1486,46 @@ LL.views = {};
       const t = tries[i];
       const c = ctl291(p, q, t.C, t.k);
       let clear = Infinity;
+      const pts = [p];
       for (let s = 1; s < 24; s += 1) {
         const b = bez291(p, c, q, s / 24);
-        obstacles.forEach((o) => { clear = Math.min(clear, Math.hypot(b.x - o.x, b.y - o.y)); });
+        pts.push(b);
+        obstacles.forEach((o) => { clear = Math.min(clear, Math.hypot(b.x - o.x, b.y - o.y) * R / (o.r || R)); });
       }
+      pts.push(q);
+      const box294 = { x0: Math.min(...pts.map((v) => v.x)), x1: Math.max(...pts.map((v) => v.x)), y0: Math.min(...pts.map((v) => v.y)), y1: Math.max(...pts.map((v) => v.y)) };
       const m = bez291(p, c, q, 0.5);
       let near = Infinity;
       mids.forEach((o) => { near = Math.min(near, Math.hypot(m.x - o.x, m.y - o.y)); });
+      // Bundle 294: crossings with lines already drawn (lines that share a phone do not count).
+      let crosses = 0; let bunch = 0;
+      lines294.forEach((L) => {
+        const shareP = same294(L.p, p) || same294(L.q, p); const shareQ = same294(L.p, q) || same294(L.q, q);
+        // quick skip: boxes that do not touch can not cross (keeps big maps fast)
+        const apart = L.box.x0 > box294.x1 || L.box.x1 < box294.x0 || L.box.y0 > box294.y1 || L.box.y1 < box294.y0;
+        if (!shareP && !shareQ && !apart) {
+          let hit = false; // 12 pieces per line are enough to see a crossing
+          for (let a = 2; a < pts.length && !hit; a += 2) for (let b = 2; b < L.pts.length && !hit; b += 2) hit = cross294(pts[a - 2], pts[a], L.pts[b - 2], L.pts[b]);
+          if (hit) crosses += 1;
+        }
+        // same phone, almost the same way in
+        [[p, pts[1]], [q, pts[pts.length - 2]]].forEach(([end, nb]) => {
+          const at = same294(L.p, end) ? L.pts[1] : (same294(L.q, end) ? L.pts[L.pts.length - 2] : null);
+          if (!at) return;
+          const a1 = Math.atan2(nb.y - end.y, nb.x - end.x); const a2 = Math.atan2(at.y - end.y, at.x - end.x);
+          let d = Math.abs(a1 - a2); if (d > Math.PI) d = 2 * Math.PI - d;
+          if (d < Math.PI / 180 * 22) bunch += 1;
+        });
+      });
       const score = Math.min(clear / R, near / M);
-      if (!best || score > best.score + 1e-9) best = { score, i, m, t };
-      if (clear >= R && near >= M) { best = { score, i, m, t }; break; }
+      // order: not under a phone, fewer crossings, no bunching, middles apart, the usual bow first
+      const rank = [clear >= R ? 0 : 1, clear >= R ? 0 : -clear, crosses, bunch, near >= M ? 0 : 1, i];
+      const better = (x, y) => { for (let z = 0; z < x.length; z += 1) { if (x[z] < y[z] - 1e-9) return true; if (x[z] > y[z] + 1e-9) return false; } return false; };
+      if (!best || better(rank, best.rank)) best = { score, i, m, t, pts, rank, box: box294 };
+      if (clear >= R && near >= M && !crosses && !bunch) break;
     }
     mids.push(best.m);
+    lines294.push({ p, q, pts: best.pts, box: best.box });
     return best.i === 0 ? first : arc217(p, q, best.t.C, best.t.k);
   }
 
@@ -1520,10 +1564,10 @@ LL.views = {};
       // state); only new phones get a new spot, only the lines change.
       const keep = mapView.pos || {};
       const kept291 = new Set();
-      nodes.forEach((n) => { const o = keep[n.device_id]; if (o && o.online === !!n.online) { pos[n.device_id] = { x: o.x, y: o.y }; kept291.add(n.device_id); } });
+      nodes.forEach((n) => { const o = keep[n.device_id]; if (o && o.online === reach294(n)) { pos[n.device_id] = { x: o.x, y: o.y }; kept291.add(n.device_id); } });
       apart291(pos, nodes.map((n) => n.device_id), kept291); // Bundle 291 (B-1)
       mapView.pos = {};
-      nodes.forEach((n) => { const q = pos[n.device_id]; if (q) mapView.pos[n.device_id] = { x: q.x, y: q.y, online: !!n.online }; });
+      nodes.forEach((n) => { const q = pos[n.device_id]; if (q) mapView.pos[n.device_id] = { x: q.x, y: q.y, online: reach294(n) }; });
       const shown = (n) => mapView.filter === 'all' || linkOf(n) === mapView.filter;
       // Bundle 217: aerial (flight-path) lines that bow away from the centre.
       const allPts = nodes.map((n) => pos[n.device_id]).filter(Boolean).concat([pos.server]);
@@ -1540,20 +1584,34 @@ LL.views = {};
         for (let x = 0; x <= pos.box.W; x += 30) edge293.push({ x, y: -24 }, { x, y: pos.box.H + 24 });
         for (let y = 0; y <= pos.box.H; y += 30) edge293.push({ x: -24, y }, { x: pos.box.W + 24, y });
       }
-      const lines = edges.map((e, i) => {
+      // Bundle 294 (C): server lines are placed first, phone lines then go around them.
+      const drawn294 = [];
+      const order294 = edges.map((e, i) => i).sort((a, b) => (edges[a].from === 'server' ? 0 : 1) - (edges[b].from === 'server' ? 0 : 1) || a - b);
+      const path294 = (e) => {
         const p = pos[e.from]; const q = pos[e.to];
         if (!p || !q) return '';
         // Bundle 291 (B-3): every other phone (and the server, for phone lines) is in the way.
         const in291 = nodes.filter((n) => n.device_id !== e.from && n.device_id !== e.to).map((n) => pos[n.device_id]).filter(Boolean);
+        // Bundle 294 (B): the photo sits above the spot and the crown above it: keep lines off both.
+        in291.slice().forEach((o) => in291.push({ x: o.x, y: o.y - 40, r: 24 }));
         if (e.from !== 'server' && pos.server) in291.push(pos.server);
         in291.push(...edge293); // Bundle 293: lines stay inside the map
+        const first = e.from === 'server' ? arc217(p, q, C, 0.60) : arc217(p, q, CP, 0.25);
+        // Bundle 294 (C): a phone (more or less) under the server gets a gentle line, not a big loop.
+        const steep294 = e.from === 'server' && Math.abs(q.x - p.x) < Math.abs(q.y - p.y) * 0.6;
+        return e.from === 'server' ? route291(p, q, C, steep294 ? [0.15, 0.35, 0.60, 0.85] : [0.60, 0.35, 0.85, 0.15], steep294 ? arc217(p, q, C, 0.15) : first, in291, mids291, drawn294)
+          : route291(p, q, CP, [0.25, 0.45, 0.10, 0.65], first, in291, mids291, drawn294);
+      };
+      const d294 = {};
+      order294.forEach((i) => { d294[i] = path294(edges[i]); });
+      const lines = edges.map((e, i) => {
+        const p = pos[e.from]; const q = pos[e.to];
+        if (!p || !q) return '';
         const to = nodes.find((n) => n.device_id === e.to) || {};
         const from = nodes.find((n) => n.device_id === e.from) || {};
         const blocked = !!(to.blocked || from.blocked);
         const dim = !(mapView.filter === 'all' || (shown(to) && (e.from === 'server' || shown(from))));
-        const first = e.from === 'server' ? arc217(p, q, C, 0.60) : arc217(p, q, CP, 0.25);
-        const d = e.from === 'server' ? route291(p, q, C, [0.60, 0.35, 0.85, 0.15], first, in291, mids291)
-          : route291(p, q, CP, [0.25, 0.45, 0.10], first, in291, mids291);
+        const d = d294[i];
         if (blocked) {
           return `<g class="link217 blocked${dim ? ' dim' : ''}"><path class="base" d="${d}"/></g>`;
         }
@@ -1569,15 +1627,15 @@ LL.views = {};
       const nodeHtml = nodes.map((n) => {
         const p = pos[n.device_id];
         const name = ui.name276(n); // Bundle 276
-        const cls = ['map216-node', shown(n) ? '' : 'dim', n.online ? '' : 'off292', mapView.pick && mapView.pick === n.user_id ? 'sel' : ''].join(' ');
+        const cls = ['map216-node', shown(n) ? '' : 'dim', reach294(n) ? '' : 'off292', mapView.pick && mapView.pick === n.user_id ? 'sel' : ''].join(' ');
         return `<div class="${cls}" style="left:${p.x}px;top:${p.y}px" data-map-pick="${ui.esc(n.user_id || '')}" title="${ui.esc(ui.phone276(n.device_name, name))}">
           ${ui.avatar216({ userId: n.user_id, name, hasAvatar: n.has_avatar, admin: n.admin_role || false, blocked: n.blocked, size: 48 })}
           <span class="tag">${ui.esc(name)}</span></div>`;
       }).join('');
       // Bundle 292: the "OFFLINE" line, 52 px over the highest offline phone,
       // only when it stays under every online phone.
-      const onY = nodes.filter((n) => n.online && pos[n.device_id]).map((n) => pos[n.device_id].y);
-      const offPts = nodes.filter((n) => !n.online && pos[n.device_id]).map((n) => pos[n.device_id]);
+      const onY = nodes.filter((n) => reach294(n) && pos[n.device_id]).map((n) => pos[n.device_id].y);
+      const offPts = nodes.filter((n) => !reach294(n) && pos[n.device_id]).map((n) => pos[n.device_id]);
       let offLine = '';
       if (offPts.length) {
         const ly = Math.min(...offPts.map((p) => p.y)) - 52;

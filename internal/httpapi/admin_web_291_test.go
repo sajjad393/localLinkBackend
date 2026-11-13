@@ -18,9 +18,10 @@ func TestAdminWebMapApart291(t *testing.T) {
 	for _, want := range []string{
 		"function apart291(pos, ids, kept)",
 		"apart291(pos, nodes.map((n) => n.device_id), kept291); // Bundle 291 (B-1)",
-		"function route291(p, q, C, ks, first, obstacles, mids)",
-		"route291(p, q, C, [0.60, 0.35, 0.85, 0.15], first, in291, mids291)",
-		"route291(p, q, CP, [0.25, 0.45, 0.10], first, in291, mids291)",
+		// TODO 294: route291 gets drawn (lines already placed), steep server lines start gentle.
+		"function route291(p, q, C, ks, first, obstacles, mids, drawn)",
+		"[0.60, 0.35, 0.85, 0.15], steep294 ? arc217(p, q, C, 0.15) : first, in291, mids291, drawn294)",
+		"route291(p, q, CP, [0.25, 0.45, 0.10, 0.65], first, in291, mids291, drawn294)",
 		"nodes.sort((a, b) => rank291(a) - rank291(b)",
 		// 217 / 272 lines stay the first choice.
 		"arc217(p, q, C, 0.60)", "arc217(p, q, CP, 0.25)",
@@ -30,7 +31,7 @@ func TestAdminWebMapApart291(t *testing.T) {
 		}
 	}
 	// The spots are saved AFTER the push apart, so the next frame keeps good spots.
-	if strings.Index(views, "kept291); // Bundle 291 (B-1)") > strings.Index(views, "mapView.pos[n.device_id] = { x: q.x, y: q.y, online: !!n.online }") {
+	if strings.Index(views, "kept291); // Bundle 291 (B-1)") > strings.Index(views, "mapView.pos[n.device_id] = { x: q.x, y: q.y, online: reach294(n) }" /* TODO 294 */) {
 		t.Fatal("push apart must run before the spots are kept")
 	}
 }

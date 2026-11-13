@@ -28,7 +28,7 @@ func TestAdminWebMapFill292(t *testing.T) {
 		"function outside292(points, view, stageW, stageH)",
 		"more \\u00b7 drag the map, or press the fit button to see everyone",
 		"<span>OFFLINE</span>",
-		"n.online ? '' : 'off292'",
+		"reach294(n) ? '' : 'off292'", // TODO 294: reached phones are not grey
 		"${ctx.liveBadge ? ctx.liveBadge() : ''}<div class=\"map216-legend\">${legend}</div></div>",
 		"data-map-pct",
 		"mapView.fitAll = true; fit();",

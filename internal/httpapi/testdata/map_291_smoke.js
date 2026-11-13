@@ -8,8 +8,8 @@ function grab(name) {
   let depth = 0, j = src.indexOf('{', i);
   for (let k = j; k < src.length; k++) { if (src[k] === '{') depth++; else if (src[k] === '}') { depth--; if (depth === 0) return src.slice(i, k + 1); } }
 }
-const code = ['layout216', 'arc217', 'apart291', 'ctl291', 'bez291', 'flip291', 'route291'].map(grab).join('\n');
-const f = new Function(code + '; return { layout216, arc217, apart291, ctl291, bez291, flip291, route291 };');
+const code = ['reach294', 'layout216', 'arc217', 'apart291', 'ctl291', 'bez291', 'flip291', 'route291'].map(grab).join('\n');
+const f = new Function(code + '; return { reach294, layout216, arc217, apart291, ctl291, bez291, flip291, route291 };');
 const m = f();
 let fails = 0;
 const ok = (c, msg) => { if (!c) { fails++; console.log('FAIL', msg); } else console.log('ok  ', msg); };

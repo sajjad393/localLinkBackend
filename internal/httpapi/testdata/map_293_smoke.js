@@ -10,7 +10,7 @@ function grab(name) {
   for (let k = j; k < src.length; k++) { if (src[k] === '{') depth++; else if (src[k] === '}') { depth--; if (depth === 0) return src.slice(i, k + 1); } }
   throw new Error('unclosed ' + name);
 }
-const names = ['layout216', 'apart291', 'fit217', 'fit292', 'outside292', 'arc217', 'ctl291', 'bez291', 'flip291', 'route291'];
+const names = ['reach294', 'layout216', 'apart291', 'fit217', 'fit292', 'outside292', 'arc217', 'ctl291', 'bez291', 'flip291', 'route291'];
 const m = new Function(names.map(grab).join('\n') + '; return { ' + names.join(', ') + ' };')();
 let fails = 0;
 const ok = (c, msg) => { if (!c) { fails++; console.log('FAIL', msg); } else console.log('ok  ', msg); };
