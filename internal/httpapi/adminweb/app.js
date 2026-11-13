@@ -675,6 +675,8 @@
     state.view = viewId;
     if (!canPatch) closeOverlays();
     if (!canPatch) LL.charts.reset();
+    // Bundle 297: leaving the Map ends its full screen.
+    if (viewId !== 'map' && LL.views.map && LL.views.map.leaveFull297) LL.views.map.leaveFull297();
 
     const restricted = view.roles && view.roles.indexOf(state.session.role) < 0;
     $('crumb-view').textContent = view.title;

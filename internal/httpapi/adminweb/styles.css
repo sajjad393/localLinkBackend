@@ -1521,3 +1521,14 @@ td { height: 52px; border-bottom: 1px solid var(--border); }
 .live274 i { width: 8px; height: 8px; border-radius: 50%; background: #98a2b3; display: inline-block; }
 .live274.on { color: #4ade80; }
 .live274.on i { background: #4ade80; box-shadow: 0 0 0 3px rgba(74, 222, 128, .18); }
+
+/* Bundle 297 (A): room for the role ring in the Phones list (the scrolling list cut its left side). */
+.map292-rows { padding-left: 4px; margin-left: -4px; }
+/* Bundle 297 (B): full screen map (only the map, zoom buttons and Exit). */
+.map216-stage.full297 { position: fixed; inset: 0; z-index: 1000; width: 100vw; height: 100vh !important; height: 100dvh !important; border: 0; border-radius: 0; }
+.map297-exit { display: none; position: absolute; top: 12px; right: 12px; z-index: 6; align-items: center; gap: 6px; height: 34px; padding: 0 14px 0 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text-primary); font: 600 13px var(--font-sans); cursor: pointer; }
+.map297-exit .icon { width: 16px; height: 16px; }
+.full297 .map297-exit { display: inline-flex; }
+.full297 .map216-zoom { top: 58px; }
+.full297 [data-map-full297] { display: none; }
+body.full297-on { overflow: hidden; }

@@ -1537,6 +1537,13 @@ LL.views = {};
     group: 'Network',
     isNew: true,
     async refresh(el, ctx) { await this.mount(el, ctx, true); return true; },
+    // Bundle 297: another page opens -> the map full screen ends.
+    leaveFull297() {
+      if (!mapView.full297) return;
+      if (mapView.setFull297) mapView.setFull297(false);
+      mapView.full297 = false;
+      document.body.classList.remove('full297-on');
+    },
     async mount(el, ctx, quiet, liveData) {
       if (!quiet) el.innerHTML = ui.bootSkeleton219('map'); // Bundle 219
       // Bundle 274: a live frame brings the map itself (no extra request).
@@ -1653,15 +1660,16 @@ LL.views = {};
           <div class="bar216">${ui.chips216(chips, mapView.filter, 'data-map-filter')}${ctx.liveBadge ? ctx.liveBadge() : ''}<div class="map216-legend">${legend}</div></div>
           <div class="map216">
             <div class="map217-wrap">
-            <div class="map216-stage" data-map-stage>
+            <div class="map216-stage${mapView.full297 ? ' full297' : ''}" data-map-stage>
               <div class="map216-world" data-map-world style="width:${pos.box.W}px;height:${pos.box.H}px;transform:translate(${mapView.x}px,${mapView.y}px) scale(${mapView.k})">
                 <svg width="${pos.box.W}" height="${pos.box.H}" aria-hidden="true">${lines}</svg>${offLine}
                 <div class="map216-node" style="left:${pos.server.x}px;top:${pos.server.y}px">
                   <span class="map216-server">${ui.icon('i-server')}</span><span class="tag" style="background:none">Server</span></div>
                 ${nodeHtml}
               </div>
-              <div class="map216-zoom"><button data-map-zoom="in" aria-label="Zoom in">+</button><button data-map-zoom="out" aria-label="Zoom out">\u2212</button><button data-map-zoom="fit" aria-label="Fit everyone">${ui.icon('i-fit')}</button><span class="map292-pct" data-map-pct>${Math.round(mapView.k * 100)}%</span></div>
+              <div class="map216-zoom"><button data-map-zoom="in" aria-label="Zoom in">+</button><button data-map-zoom="out" aria-label="Zoom out">\u2212</button><button data-map-zoom="fit" aria-label="Fit everyone" title="Fit everyone">${ui.icon('i-fit')}</button><button data-map-full297 aria-label="Full screen" title="Full screen">${ui.icon('i-full297')}</button><span class="map292-pct" data-map-pct>${Math.round(mapView.k * 100)}%</span></div>
               <div class="map292-more" data-map-more hidden></div>
+              <button type="button" class="map297-exit" data-map-exit297 aria-label="Exit full screen">${ui.icon('i-close')}<span>Exit full screen</span></button>
               ${nodes.length ? '' : '<div class="empty216" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)">No phones yet.</div>'}
             </div>
             </div>
@@ -1688,6 +1696,7 @@ LL.views = {};
       // scrolled from there. Kept per screen width (the address bar coming and
       // going does not resize it). Computer: the 292 CSS height.
       const fitHeight293 = () => {
+        if (mapView.full297) return; // Bundle 297: the full screen map is sized by CSS
         if (window.innerWidth > 1100) { stage.style.height = ''; return; }
         if (mapView.h293 && mapView.w293 === window.innerWidth) { stage.style.height = mapView.h293 + 'px'; return; }
         const sc = (document.scrollingElement && document.scrollingElement.scrollTop) || 0;
@@ -1736,7 +1745,7 @@ LL.views = {};
         drag = null;
       };
       stage.addEventListener('pointerdown', (ev) => {
-        if (ev.target.closest('[data-map-pick],[data-map-zoom]')) return;
+        if (ev.target.closest('[data-map-pick],[data-map-zoom],[data-map-full297],[data-map-exit297]')) return; // Bundle 297: the full screen buttons are not a drag
         pts.set(ev.pointerId, local(ev));
         try { stage.setPointerCapture(ev.pointerId); } catch (_) { /* old browsers */ }
         stage.classList.add('drag');
@@ -1794,6 +1803,38 @@ LL.views = {};
         mapView.fitted = true;
         zoomAt(z === 'in' ? 1.25 : 0.8, r.width / 2, r.height / 2);
       }));
+      // Bundle 297 (B): full screen map. The page itself goes full screen (the map
+      // is drawn again on every live frame, so the stage can not be the full
+      // screen element); CSS shows only the map. No full screen API (iPhone):
+      // the map still fills the page. Exit button, Esc or the browser's own exit.
+      const setFull297 = (on) => {
+        mapView.full297 = on;
+        stage.classList.toggle('full297', on);
+        document.body.classList.toggle('full297-on', on);
+        const d = document; const root = d.documentElement;
+        try {
+          if (on && !d.fullscreenElement && root.requestFullscreen) root.requestFullscreen().catch(() => {});
+          else if (on && !d.webkitFullscreenElement && root.webkitRequestFullscreen) root.webkitRequestFullscreen();
+          else if (!on && d.fullscreenElement && d.exitFullscreen) d.exitFullscreen().catch(() => {});
+          else if (!on && d.webkitFullscreenElement && d.webkitExitFullscreen) d.webkitExitFullscreen();
+        } catch (_) { /* not allowed: the CSS full page stays */ }
+        mapView.fitted = false;
+        setTimeout(() => { if (stage.isConnected) { fitHeight293(); autoFit(); } }, 120);
+      };
+      mapView.setFull297 = setFull297;
+      const fullBtn = el.querySelector('[data-map-full297]');
+      if (fullBtn) fullBtn.addEventListener('click', () => { fullBtn.blur(); setFull297(true); });
+      const exitBtn = el.querySelector('[data-map-exit297]');
+      if (exitBtn) exitBtn.addEventListener('click', () => setFull297(false));
+      if (!mapView.on297) {
+        // Once per page: Esc and the browser's own exit end the map full screen.
+        mapView.on297 = true;
+        document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && mapView.full297 && mapView.setFull297) mapView.setFull297(false); });
+        const left = () => { if (!document.fullscreenElement && !document.webkitFullscreenElement && mapView.full297 && mapView.setFull297) mapView.setFull297(false); };
+        document.addEventListener('fullscreenchange', left);
+        document.addEventListener('webkitfullscreenchange', left);
+      }
+      document.body.classList.toggle('full297-on', !!mapView.full297);
       // Motion stops while the tab is hidden (reduce-motion is handled in CSS).
       const svg = el.querySelector('.map216-world > svg');
       const motion = () => {
