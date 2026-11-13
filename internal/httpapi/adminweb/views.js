@@ -1292,7 +1292,9 @@ LL.views = {};
     const GAP = 130; const ROW = 112; const BOW = 26;
     const sw = Math.max(320, Number(stageW) || 794);
     const perRow = Math.max(2, Math.floor((sw - 60) / GAP));
-    const W = Math.max(sw, Math.min(Math.max(1, nodes.length), perRow) * GAP + 60 + GAP / 2);
+    // Bundle 293: 2 in a row (phones): no stagger, so the world is never wider than the stage.
+    const stagger = perRow >= 3; const ROW_OFF = stagger ? ROW : 124;
+    const W = Math.max(sw, Math.min(Math.max(1, nodes.length), perRow) * GAP + 60 + (stagger ? GAP / 2 : 0));
     const cx = W / 2;
     const pos = { server: { x: cx, y: 58, fixed: true } };
     const online = nodes.filter((n) => n.online);
@@ -1305,13 +1307,13 @@ LL.views = {};
         const w = (row.length - 1) * GAP;
         let xs = row.map((_, i) => cx - w / 2 + i * GAP);
         // a row under another never puts a phone right under one (stagger).
-        if (xs.some((x) => above.some((a) => Math.abs(a - x) < 1))) xs = xs.map((x) => x + GAP / 2);
+        if (stagger && xs.some((x) => above.some((a) => Math.abs(a - x) < 1))) xs = xs.map((x) => x + GAP / 2);
         row.forEach((n, i) => {
           const t = row.length > 1 ? (i / (row.length - 1)) * 2 - 1 : 0;
           pos[n.device_id] = { x: xs[i], y: y + (bow ? BOW * (1 - t * t) : 0) };
         });
         above = xs;
-        y += ROW + (bow ? BOW : 0);
+        y += bow ? ROW + BOW : ROW_OFF;
       }
     };
     put(online, true);
@@ -1355,6 +1357,13 @@ LL.views = {};
     const minX = Math.min(...xs) - 70; const maxX = Math.max(...xs) + 70;
     const minY = Math.min(...ys) - 50; const maxY = Math.max(...ys) + 80;
     const bw = Math.max(1, maxX - minX); const bh = Math.max(1, maxY - minY);
+    // Bundle 293 (TODO_293 A8): phone browsers (map 640 px or less) start a
+    // little zoomed out: 80 - 90 % instead of 100 - 140 % (computer unchanged).
+    if (stageW <= 640) {
+      const wantP = Math.min(0.9, Math.min(stageW / bw, stageH / bh));
+      const kp = Math.max(0.8, wantP);
+      return { k: kp, x: (stageW - bw * kp) / 2 - minX * kp, y: wantP < 0.8 ? 18 - minY * kp : (stageH - bh * kp) / 2 - minY * kp };
+    }
     const want = Math.min(1.4, Math.min(stageW / bw, stageH / bh));
     const over = want < 1;
     const k = Math.max(1, want);
@@ -1524,12 +1533,20 @@ LL.views = {};
       const phonePts = nodes.map((n) => pos[n.device_id]).filter(Boolean);
       const CP = phonePts.length ? phonePts.reduce((a, p) => ({ x: a.x + p.x / phonePts.length, y: a.y + p.y / phonePts.length }), { x: 0, y: 0 }) : C;
       const mids291 = [];
+      // Bundle 293: points just outside the map edge; route291 keeps 34 px from them,
+      // so a line never leaves the map (a free 217 line inside it is unchanged).
+      const edge293 = [];
+      if (pos.box) {
+        for (let x = 0; x <= pos.box.W; x += 30) edge293.push({ x, y: -24 }, { x, y: pos.box.H + 24 });
+        for (let y = 0; y <= pos.box.H; y += 30) edge293.push({ x: -24, y }, { x: pos.box.W + 24, y });
+      }
       const lines = edges.map((e, i) => {
         const p = pos[e.from]; const q = pos[e.to];
         if (!p || !q) return '';
         // Bundle 291 (B-3): every other phone (and the server, for phone lines) is in the way.
         const in291 = nodes.filter((n) => n.device_id !== e.from && n.device_id !== e.to).map((n) => pos[n.device_id]).filter(Boolean);
         if (e.from !== 'server' && pos.server) in291.push(pos.server);
+        in291.push(...edge293); // Bundle 293: lines stay inside the map
         const to = nodes.find((n) => n.device_id === e.to) || {};
         const from = nodes.find((n) => n.device_id === e.from) || {};
         const blocked = !!(to.blocked || from.blocked);
@@ -1572,6 +1589,7 @@ LL.views = {};
       const legend = Object.keys(ui.LINKS_216).filter((k) => edges.some((e) => e.link === k))
         .map((k) => `<span><i style="background:${ui.LINKS_216[k].color}"></i>${ui.esc(ui.LINKS_216[k].label)}</span>`).join('')
         + (nodes.some((n) => n.blocked) ? '<span><i class="dash217"></i>Blocked \u00b7 relays only</span>' : '');
+      const legendCount293 = (legend.match(/<span>/g) || []).length;
       el.innerHTML = `
         <div class="section">
           <div class="bar216">${ui.chips216(chips, mapView.filter, 'data-map-filter')}${ctx.liveBadge ? ctx.liveBadge() : ''}<div class="map216-legend">${legend}</div></div>
@@ -1604,6 +1622,23 @@ LL.views = {};
 
       const world = el.querySelector('[data-map-world]');
       const stage = el.querySelector('[data-map-stage]');
+      // Bundle 293: a legend with one line type is hidden on phones (CSS .one).
+      const legendEl293 = el.querySelector('.map216-legend');
+      if (legendEl293) legendEl293.classList.toggle('one', legendCount293 < 2);
+      // Bundle 293: phones / tablets (one column): the map fits the visible
+      // screen and 64 px of the Phones list peeks under it, so the page can be
+      // scrolled from there. Kept per screen width (the address bar coming and
+      // going does not resize it). Computer: the 292 CSS height.
+      const fitHeight293 = () => {
+        if (window.innerWidth > 1100) { stage.style.height = ''; return; }
+        if (mapView.h293 && mapView.w293 === window.innerWidth) { stage.style.height = mapView.h293 + 'px'; return; }
+        const sc = (document.scrollingElement && document.scrollingElement.scrollTop) || 0;
+        const top = stage.getBoundingClientRect().top + sc + (document.body.scrollTop || 0);
+        mapView.w293 = window.innerWidth;
+        mapView.h293 = Math.max(300, Math.round(window.innerHeight - top - 64));
+        stage.style.height = mapView.h293 + 'px';
+      };
+      fitHeight293();
       // Bundle 292: the zoom text and the "+N more" pill follow every move.
       const pct = el.querySelector('[data-map-pct]');
       const more = el.querySelector('[data-map-more]');
@@ -1618,7 +1653,8 @@ LL.views = {};
         if (more) {
           const n = outside292(nodes.filter(shown).map((x) => pos[x.device_id]).filter(Boolean), mapView, stage.clientWidth, stage.clientHeight);
           more.hidden = n === 0;
-          more.textContent = n ? `+${n} more \u00b7 drag the map, or press the fit button to see everyone` : '';
+          more.textContent = !n ? '' : (window.innerWidth <= 640 ? `+${n} more \u00b7 drag the map to see them` // Bundle 293: short on phones
+            : `+${n} more \u00b7 drag the map, or press the fit button to see everyone`);
         }
       };
       const zoomAt = (factor, cx, cy) => {
@@ -1695,6 +1731,7 @@ LL.views = {};
       el.querySelectorAll('[data-map-zoom]').forEach((b) => b.addEventListener('click', () => {
         const r = stage.getBoundingClientRect();
         const z = b.getAttribute('data-map-zoom');
+        b.blur(); // Bundle 293: no ring left on the button after a tap
         if (z === 'fit') { mapView.fitted = false; mapView.fitAll = true; fit(); return; }
         mapView.fitted = true;
         zoomAt(z === 'in' ? 1.25 : 0.8, r.width / 2, r.height / 2);
@@ -1714,7 +1751,7 @@ LL.views = {};
       let resizeTimer = 0;
       mapView.offResize = () => {
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(() => { if (!mapView.fitted && stage.isConnected) autoFit(); }, 150);
+        resizeTimer = setTimeout(() => { if (!stage.isConnected) return; fitHeight293(); if (!mapView.fitted) autoFit(); }, 150);
       };
       window.addEventListener('resize', mapView.offResize);
       el.querySelectorAll('[data-map-filter]').forEach((b) => b.addEventListener('click', () => { mapView.filter = b.getAttribute('data-map-filter'); mapView.fitted = false; mapView.fitAll = false; this.mount(el, ctx, true, mapView.last); }));

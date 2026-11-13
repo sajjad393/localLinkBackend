@@ -1196,6 +1196,18 @@ td { height: 52px; border-bottom: 1px solid var(--border); }
 :root:not([data-theme="dark"]) .map292-off { border-top-color: #d0d7de; }
 :root:not([data-theme="dark"]) .map292-off span { background: #f6f8fa; }
 :root:not([data-theme="dark"]) .map292-more { background: rgba(255, 255, 255, .9); }
+/* Bundle 293 (TODO_293): phones / tablets. These come after the 292 rules so
+   they win (the 292 one-column rule sat earlier in the file and lost): the
+   Phones panel takes its own height again, its list does not scroll inside. */
+@media (max-width: 1100px) {
+  .map216 > .panel { height: auto; }
+  .map292-rows { overflow: visible; margin-right: 0; padding-right: 0; }
+}
+@media (max-width: 640px) {
+  .map216-legend { flex-basis: auto; margin-left: 0; }
+  .map216-legend.one { display: none; }
+}
+.map216-zoom button:focus:not(:focus-visible) { outline: none; box-shadow: none; }
 #identity-initial.has-crown .av216-crown { top: 0; transform: translate(-50%, calc(-100% + .4px)); }
 @media (prefers-reduced-motion: reduce) {
   .link217 .flow { animation: none !important; }
