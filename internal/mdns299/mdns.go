@@ -11,10 +11,12 @@ package mdns299
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -201,6 +203,7 @@ func Start(name string) (func(), error) {
 		return nil, err
 	}
 	var conns []*net.UDPConn
+	var nets []*net.Interface
 	for i := range ifaces {
 		ifi := ifaces[i]
 		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagMulticast == 0 || ifi.Flags&net.FlagLoopback != 0 {
@@ -211,40 +214,42 @@ func Start(name string) (func(), error) {
 			log.Printf("MDNS_299 skip %s: %v", ifi.Name, err)
 			continue
 		}
+		// Bundle 300: ListenMulticastUDP switches multicast loopback off.
+		// On Windows that hides the questions this PC itself asks (its own
+		// browser); on Linux it hides our answer from a local asker. Turn
+		// it back on; our own answers coming back are ignored (responses).
+		if err := setLoop300(c); err != nil {
+			log.Printf("MDNS_299 loop %s: %v (this PC's own browser may not find the name)", ifi.Name, err)
+		}
 		conns = append(conns, c)
+		nets = append(nets, &ifi)
 	}
 	if len(conns) == 0 {
 		return nil, errors.New("no network accepted multicast")
 	}
 	var mu sync.Mutex // one reply at a time; replies are tiny
-	for _, c := range conns {
-		go func(c *net.UDPConn) {
+	seen := newAskLog300()
+	for k, c := range conns {
+		go func(c *net.UDPConn, ifi *net.Interface) {
 			buf := make([]byte, 1500)
 			for {
 				n, src, err := c.ReadFromUDP(buf)
 				if err != nil {
 					return
 				}
-				addrs, _ := net.InterfaceAddrs()
-				ip := localIPFor(src.IP, addrs)
-				if ip == nil {
-					continue // not from a network we are on
-				}
-				legacy := src.Port != 5353
-				out := buildAnswer(buf[:n], name, ip, legacy)
+				addrs, _ := ifi.Addrs()
+				out, to, ip := reply300(buf[:n], src, name, addrs)
 				if out == nil {
 					continue
 				}
-				unicast := legacy || asksDirect(buf[:n])
-				to := group
-				if unicast {
-					to = src
+				if line := seen.line(src, name, ip, to == group, time.Now()); line != "" {
+					log.Print(line)
 				}
 				mu.Lock()
 				_, _ = c.WriteToUDP(out, to)
 				mu.Unlock()
 			}
-		}(c)
+		}(c, nets[k])
 	}
 	log.Printf("MDNS_299 answering %s on %d network(s)", name, len(conns))
 	return func() {
@@ -252,6 +257,69 @@ func Start(name string) (func(), error) {
 			_ = c.Close()
 		}
 	}, nil
+}
+
+// reply300 decides the answer for one packet that arrived on a network with
+// addrs: the bytes, where to send them and the IP we announced. nil = not
+// for us (other name, a response, or an asker outside this network).
+//   - legacy one-shot (Android, src port != 5353): unicast to its own port.
+//   - QU bit from another device: unicast to it (RFC 6762 5.4).
+//   - everything else, and any 5353 question from THIS PC: multicast.
+//     Windows' own DNS client shares port 5353 with us, so a unicast
+//     answer to this PC's 5353 could land on our own socket instead.
+func reply300(msg []byte, src *net.UDPAddr, name string, addrs []net.Addr) ([]byte, *net.UDPAddr, net.IP) {
+	ip := localIPFor(src.IP, addrs)
+	if ip == nil {
+		return nil, nil, nil // not from this network
+	}
+	legacy := src.Port != 5353
+	out := buildAnswer(msg, name, ip, legacy)
+	if out == nil {
+		return nil, nil, nil
+	}
+	if legacy || (asksDirect(msg) && !isOwnIP300(src.IP, addrs)) {
+		return out, src, ip
+	}
+	return out, group, ip
+}
+
+func isOwnIP300(ip net.IP, addrs []net.Addr) bool {
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// askLog300 prints "MDNS_299 asked by ..." once per asker per 10 minutes,
+// so the server window shows whether a phone's question arrived at all.
+type askLog300 struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+func newAskLog300() *askLog300 { return &askLog300{last: map[string]time.Time{}} }
+
+func (l *askLog300) line(src *net.UDPAddr, name string, ip net.IP, multicast bool, now time.Time) string {
+	key := src.IP.String()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if t, ok := l.last[key]; ok && now.Sub(t) < 10*time.Minute {
+		return ""
+	}
+	if len(l.last) > 256 {
+		l.last = map[string]time.Time{}
+	}
+	l.last[key] = now
+	kind, how := "mdns", "unicast"
+	if src.Port != 5353 {
+		kind = "legacy"
+	}
+	if multicast {
+		how = "multicast"
+	}
+	return fmt.Sprintf("MDNS_299 asked by %s for %s (%s) -> answered %s (%s)", key, name, kind, ip, how)
 }
 
 // asksDirect reports the QU bit ("answer me directly") on the first question.
