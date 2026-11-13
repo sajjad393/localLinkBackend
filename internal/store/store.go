@@ -1487,6 +1487,34 @@ func orderedMigrationSpecs() []orderedMigrationSpec {
 			CREATE INDEX IF NOT EXISTS idx_join_relay_device ON join_relay_answers(device_id);`)
 			return err
 		},
+	}, {
+		// Bundle 299 (A): the LinkUp APK the owner puts on the server for
+		// everyone (web "App download", page /download, in-app update).
+		// Only the current row has a file in data/apk; old rows are history.
+		Version:     62,
+		Name:        "app-apk-299",
+		Checksum:    "locallink-app-apk-299-v1",
+		Predecessor: 61,
+		Apply: func(tx *sql.Tx) error {
+			_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS app_apk_299 (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				version TEXT NOT NULL,
+				build INTEGER NOT NULL,
+				file_name TEXT NOT NULL,
+				size INTEGER NOT NULL,
+				sha256 TEXT NOT NULL,
+				cert_sha256 TEXT NOT NULL,
+				added_at TEXT NOT NULL,
+				added_by TEXT NOT NULL DEFAULT '',
+				downloads INTEGER NOT NULL DEFAULT 0,
+				removed_at TEXT NOT NULL DEFAULT '',
+				removed_by TEXT NOT NULL DEFAULT '',
+				why TEXT NOT NULL DEFAULT '',
+				current INTEGER NOT NULL DEFAULT 0
+			);
+			CREATE INDEX IF NOT EXISTS idx_app_apk_299_current ON app_apk_299(current);`)
+			return err
+		},
 	}}
 }
 

@@ -30,6 +30,7 @@ func versionGateExempt(path string) bool {
 	for _, p := range []string{
 		"/api/v1/admin/", "/api/v1/trust", "/api/v1/version-rule",
 		"/api/v1/status", "/api/v1/pairing/info",
+		"/api/v1/app/latest", // Bundle 299: an old phone must still find the new APK
 	} {
 		if strings.HasPrefix(path, p) {
 			return true

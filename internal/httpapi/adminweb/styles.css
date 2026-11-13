@@ -1212,6 +1212,7 @@ td { height: 52px; border-bottom: 1px solid var(--border); }
 @media (prefers-reduced-motion: reduce) {
   .link217 .flow { animation: none !important; }
   .link217 .dot { display: none; }
+  .apk299-bar.checking i { animation: none; } /* Bundle 299 */
 }
 
 /* Bundle 217: responsive */
@@ -1532,3 +1533,44 @@ td { height: 52px; border-bottom: 1px solid var(--border); }
 .full297 .map216-zoom { top: 58px; }
 .full297 [data-map-full297] { display: none; }
 body.full297-on { overflow: hidden; }
+
+/* Bundle 299 (A): App download */
+.apk299-now { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.apk299-app, .apk299-link { padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-muted); min-width: 0; }
+.apk299-app { display: flex; gap: 14px; align-items: flex-start; }
+.apk299-link { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: 'qr text' 'qr btns'; column-gap: 14px; row-gap: 10px; align-content: start; }
+.apk299-link .apk299-qr { grid-area: qr; }
+.apk299-link .grow { grid-area: text; min-width: 0; }
+.apk299-linkbtns { grid-area: btns; display: flex; gap: 8px; flex-wrap: wrap; align-self: start; }
+.apk299-logo { width: 52px; height: 52px; flex: none; display: block; }
+.apk299-logo svg { width: 100%; height: 100%; display: block; border-radius: 13px; box-shadow: 0 6px 18px rgba(47, 123, 246, .28); }
+.apk299-logo.sm { width: 40px; height: 40px; }
+.apk299-name { font-size: 18px; font-weight: 700; color: var(--text-primary); }
+.apk299-build { font-size: 13px; font-weight: 500; color: var(--text-tertiary); margin-left: 4px; }
+.apk299-stats { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.apk299-remove { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.apk299-qr { width: 112px; height: 112px; flex: none; background: #fff; border-radius: 12px; padding: 8px; box-sizing: border-box; }
+.apk299-qr svg { width: 100%; height: 100%; display: block; }
+.apk299-warn { color: #f59e0b; margin-top: 4px; }
+.apk299-url { font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--primary); margin-top: 4px; word-break: break-all; }
+.apk299-none { display: flex; flex-direction: column; gap: 6px; }
+.apk299-none .apk299-link { margin-top: 10px; }
+.apk299-drop { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 30px 16px; border: 2px dashed var(--border-strong); border-radius: 16px; background: var(--surface-muted); cursor: pointer; text-align: center; transition: border-color .15s, background .15s; }
+.apk299-drop:hover, .apk299-drop:focus-visible, .apk299-drop.over { border-color: var(--primary); background: var(--selected); outline: none; }
+.apk299-drop-icon { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: var(--primary-soft); color: var(--primary); }
+.apk299-drop-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.apk299-drop b { font-size: 15px; color: var(--text-primary); }
+.apk299-rule { max-width: 460px; }
+.apk299-up { display: flex; gap: 14px; align-items: center; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-muted); }
+.apk299-bar { height: 8px; border-radius: 99px; background: var(--border); overflow: hidden; margin: 8px 0 6px; }
+.apk299-bar i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #2f7bf6, #22d3ee); transition: width .2s; }
+.apk299-bar.checking i { animation: apk299pulse 1.2s ease-in-out infinite; }
+@keyframes apk299pulse { 50% { opacity: .45; } }
+.apk299-msg { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: var(--danger-soft); color: var(--danger); }
+.apk299-msg svg { width: 18px; height: 18px; flex: none; margin-top: 1px; }
+.apk299-msg .type-caption { color: var(--text-secondary); margin-top: 2px; }
+@media (max-width: 760px) {
+  .apk299-now { grid-template-columns: 1fr; }
+  .apk299-link { grid-template-areas: 'qr text' 'btns btns'; }
+  .apk299-qr { width: 96px; height: 96px; }
+}

@@ -57,6 +57,8 @@ type API struct {
 	tlsMu243   sync.RWMutex
 	tlsPort243 int
 	tlsSHA243  string
+	// Bundle 299: the server APK (memory copy + download counts).
+	apk299 apkState299
 }
 
 type messageRate struct {

@@ -3029,6 +3029,158 @@ LL.views = {};
     },
   };
 
+
+  // ------------------------------------------------------------ app download
+  // Bundle 299 (A): the owner puts the LinkUp APK on the server. Everyone on
+  // the server's Wi-Fi opens http://<server>:8080/linkup and taps Download;
+  // phones with LinkUp get it inside the app. One APK at a time: a newer one
+  // replaces it (the old file is deleted, its name + version stay in History).
+  function mb299(bytes) { const n = num(bytes); return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+  function when299(iso) {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + ', ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  const APK_LOGO_299 = '<svg viewBox="0 0 48 48" aria-hidden="true"><defs><linearGradient id="apk299g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2f7bf6"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs><rect width="48" height="48" rx="13" fill="#0e1a33"/><circle cx="18.5" cy="24" r="7.6" fill="none" stroke="url(#apk299g)" stroke-width="4.2"/><circle cx="29.5" cy="24" r="7.6" fill="none" stroke="url(#apk299g)" stroke-width="4.2"/></svg>';
+  const apkdownload = {
+    id: 'apkdownload',
+    title: 'App download',
+    subtitle: 'Put LinkUp on the server for everyone',
+    icon: 'i-download',
+    group: 'System',
+    roles: ['owner'],
+    async mount(el, ctx) {
+      el.innerHTML = ui.skeletonPanel(4);
+      const result = await settle(ctx.api('/api/v1/admin/apk299'));
+      if (!result.ok) { el.innerHTML = ui.panel({ title: 'App download', body: ui.errorState(result.error, 'apkdownload') }); return; }
+      const d = result.data || {};
+      const cur = d.current;
+      const link = d.link || '';
+      const history = Array.isArray(d.history) ? d.history : [];
+      const linkBox = `<div class="apk299-link">
+          <div class="apk299-qr">${d.qr_svg || ''}</div>
+          <div class="grow">
+            <div class="type-caption">Type this on any phone on the server's Wi-Fi</div>
+            <div class="apk299-url" data-apk299-url>${ui.esc(d.short || link)}</div>
+            <div class="type-caption" style="margin-top:4px">${d.short ? `Older phones (Android 10/11): ${ui.esc(link)} or scan the code.` : 'Or scan the code with the phone camera.'}</div>
+            ${d.address && d.address.status && d.address.status !== 'healthy' ? `<div class="type-caption apk299-warn" data-apk299-address>${ui.esc(d.address.detail || '')}</div>` : ''}
+          </div>
+          <div class="apk299-linkbtns">
+            <button class="btn btn-sm" type="button" data-apk299-copy>Copy link</button>
+            <a class="btn btn-sm" href="${ui.esc(link)}" target="_blank" rel="noopener">${ui.icon('i-external')}Open page</a>
+          </div>
+        </div>`;
+      const nowBody = cur ? `<div class="apk299-now">
+          <div class="apk299-app">
+            <span class="apk299-logo">${APK_LOGO_299}</span>
+            <div class="grow">
+              <div class="apk299-name">LinkUp ${ui.esc(cur.version)} <span class="apk299-build">build ${ui.esc(cur.build)}</span></div>
+              <div class="type-caption">${ui.esc(cur.file_name)} \u00b7 ${mb299(cur.size)}</div>
+              <div class="type-caption">Added ${ui.esc(when299(cur.added_at))} by ${ui.esc(cur.added_by)}</div>
+              <div class="apk299-stats">${ui.pill216('On the server', 'green')}${ui.pill216('Downloaded ' + fmt.number(num(cur.downloads)) + (num(cur.downloads) === 1 ? ' time' : ' times'), 'blue')}${num(cur.phones_behind) ? ui.pill216(fmt.number(num(cur.phones_behind)) + ' phone(s) on an older LinkUp', 'orange') : ''}</div>
+              <div class="row gap-sm" style="margin-top:12px">
+                <a class="btn btn-sm" href="/linkup/${ui.esc(cur.file_name)}" download>${ui.icon('i-download')}Download</a>
+                <button class="btn btn-sm apk299-remove" type="button" data-apk299-remove>Remove</button>
+              </div>
+            </div>
+          </div>
+          ${linkBox}
+        </div>`
+        : `<div class="apk299-none"><b>No app on the server yet</b><span class="type-caption">Add the LinkUp APK below. Then the link works for everyone.</span>${linkBox}</div>`;
+      const drop = `<div class="apk299-drop" data-apk299-drop tabindex="0" role="button" aria-label="Choose the LinkUp APK">
+          <span class="apk299-drop-icon"><svg viewBox="0 0 24 24"><path d="M12 16V4M8 8l4-4 4 4"/><path d="M5 20h14"/></svg></span>
+          <b>Drag the LinkUp APK here</b>
+          <span class="type-caption">or</span>
+          <button class="btn btn-primary btn-sm" type="button" data-apk299-pick>Choose file</button>
+          <input type="file" accept=".apk,application/vnd.android.package-archive" hidden data-apk299-file>
+          <span class="type-caption apk299-rule">Only LinkUp (com.sajjad.linkup)${cur ? `, newer than ${ui.esc(cur.version)}` : ''}, signed with the same key. Up to 300 MB.</span>
+        </div>
+        <div class="apk299-up hidden" data-apk299-up>
+          <span class="apk299-logo sm">${APK_LOGO_299}</span>
+          <div class="grow">
+            <div class="row" style="justify-content:space-between"><b data-apk299-upname></b><span class="type-caption" data-apk299-uppct></span></div>
+            <div class="apk299-bar"><i data-apk299-upbar style="width:0%"></i></div>
+            <div class="type-caption" data-apk299-upline></div>
+          </div>
+          <button class="btn btn-sm" type="button" data-apk299-cancel>Cancel</button>
+        </div>
+        <div class="apk299-msg hidden" data-apk299-msg></div>`;
+      const rows = history.map((h) => [
+        `<b>${ui.esc(h.version)}</b> <span class="type-caption">(${ui.esc(h.build)})</span>`,
+        ui.esc(h.file_name) + (h.current ? '' : `<div class="type-caption">file deleted ${ui.esc(when299(h.removed_at))}</div>`),
+        mb299(h.size),
+        ui.esc(when299(h.added_at)) + `<div class="type-caption">by ${ui.esc(h.added_by)}</div>`,
+        fmt.number(num(h.downloads)),
+        h.current ? ui.pill216('Current', 'green') : ui.pill216(h.why === 'removed' ? 'Removed' : 'Replaced', 'grey'),
+      ]);
+      el.innerHTML = `<div class="section">
+          ${ui.sectionHead({ title: 'App download', subtitle: 'Phones on the server\u2019s Wi-Fi download LinkUp from here. No internet needed.', icon: 'i-download' })}
+          ${ui.panel({ title: 'On the server now', body: nowBody })}
+          ${ui.panel({ title: cur ? 'Add a newer version' : 'Add the app', subtitle: 'The old file is deleted at once; its name and version stay in History', body: drop })}
+          ${ui.panel({ title: 'History', subtitle: 'Every version that was on the server', body: ui.table({ columns: [{ label: 'Version' }, { label: 'File' }, { label: 'Size' }, { label: 'Added' }, { label: 'Downloads' }, { label: 'Status' }], rows, emptyTitle: 'No versions yet', emptyMessage: 'The first APK you add shows here.' }) })}
+        </div>`;
+      wire299(el, ctx, cur);
+    },
+  };
+  function wire299(el, ctx, cur) {
+    const q = (s) => el.querySelector(s);
+    const copy = q('[data-apk299-copy]');
+    if (copy) copy.addEventListener('click', async () => {
+      const t = q('[data-apk299-url]').textContent;
+      try { await navigator.clipboard.writeText(t); ctx.toast('Link copied', 'success'); } catch (_) { ctx.toast(t, 'info'); }
+    });
+    const drop = q('[data-apk299-drop]');
+    const input = q('[data-apk299-file]');
+    q('[data-apk299-pick]').addEventListener('click', (e) => { e.stopPropagation(); input.click(); });
+    drop.addEventListener('click', () => input.click());
+    ['dragenter', 'dragover'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+    ['dragleave', 'drop'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
+    drop.addEventListener('drop', (e) => { const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) send299(el, ctx, f); });
+    input.addEventListener('change', () => { if (input.files[0]) send299(el, ctx, input.files[0]); input.value = ''; });
+    const rm = q('[data-apk299-remove]');
+    if (rm) rm.addEventListener('click', async () => {
+      const ok = await ctx.confirm({ title: 'Remove LinkUp ' + cur.version + '?', message: 'The file is deleted from the server. The link shows "No app yet" until you add one. It stays in History.', confirmLabel: 'Remove', destructive: true });
+      if (!ok) return;
+      try { await ctx.api('/api/v1/admin/apk299', { method: 'DELETE' }); ctx.toast('Removed', 'success'); ctx.refresh(); } catch (err) { ctx.toast(err.message || 'Could not remove it', 'error'); }
+    });
+  }
+  // The upload: XHR so the bar moves (fetch has no upload progress).
+  function show299(el, state) {
+    const q = (s) => el.querySelector(s);
+    q('[data-apk299-drop]').classList.toggle('hidden', !!state.file);
+    q('[data-apk299-up]').classList.toggle('hidden', !state.file);
+    if (state.file) {
+      const pct = state.total ? Math.round(100 * state.sent / state.total) : 0;
+      q('[data-apk299-upname]').textContent = state.file;
+      q('[data-apk299-uppct]').textContent = state.checking ? '' : pct + '%';
+      q('[data-apk299-upbar]').style.width = (state.checking ? 100 : pct) + '%';
+      q('[data-apk299-upbar]').parentElement.classList.toggle('checking', !!state.checking);
+      q('[data-apk299-upline]').textContent = state.checking ? 'Checking the APK\u2026 (name, version, signature)' : mb299(state.sent) + ' of ' + mb299(state.total) + ' \u00b7 keep this page open';
+    }
+    const msg = q('[data-apk299-msg]');
+    msg.classList.toggle('hidden', !state.error);
+    msg.innerHTML = state.error ? `${ui.icon('i-alert')}<div><b>${ui.esc(state.error)}</b>${state.hint ? `<div class="type-caption">${ui.esc(state.hint)}</div>` : ''}</div>` : '';
+  }
+  function send299(el, ctx, file) {
+    const token = ctx.state.token || localStorage.getItem('locallink_admin_token') || '';
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/v1/admin/apk299');
+    xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+    xhr.upload.onprogress = (e) => show299(el, { file: file.name, sent: e.loaded, total: e.total || file.size, checking: e.loaded >= (e.total || file.size) });
+    xhr.onload = () => {
+      let body = {}; try { body = JSON.parse(xhr.responseText || '{}'); } catch (_) { body = {}; }
+      if (xhr.status >= 200 && xhr.status < 300) { ctx.toast('LinkUp ' + (body.version || '') + ' is on the server', 'success'); ctx.refresh(); return; }
+      show299(el, { error: body.error || 'Could not add it', hint: body.hint || '' });
+    };
+    xhr.onerror = () => show299(el, { error: 'The upload stopped', hint: 'Check the Wi-Fi and try again.' });
+    el.querySelector('[data-apk299-cancel]').onclick = () => { xhr.abort(); show299(el, {}); };
+    show299(el, { file: file.name, sent: 0, total: file.size });
+    const form = new FormData();
+    form.append('apk', file, file.name);
+    xhr.send(form);
+  }
+  LL.apk299 = { show: show299 };
+
   // Bundle 216: sidebar order People / Network / Safety / System.
   // ------------------------------------------------------------ admin actions
   // Bundle 220: every admin action goes to all phones. Pending until the
@@ -3203,7 +3355,7 @@ LL.views = {};
     },
   };
 
-  LL.views = { dashboard, users, devices, sessions, map, network, calls, transfers, recovery, security, audit, conversations, actions, appversion, diagnostics, settings, privacy };
+  LL.views = { dashboard, users, devices, sessions, map, network, calls, transfers, recovery, security, audit, conversations, actions, appversion, apkdownload, diagnostics, settings, privacy };
 
   // Modules that are restricted to specific roles (used by quick actions too).
   LL.moduleRoles = { settings: ['owner'], conversations: ['owner'], appversion: ['owner'] };

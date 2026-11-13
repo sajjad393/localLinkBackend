@@ -183,6 +183,17 @@ func main() {
 	mux.HandleFunc("POST /api/v1/version-rule/sync", api.VersionRuleSync)
 	mux.HandleFunc("GET /api/v1/admin/version-rule", api.AdminGetVersionRule)
 	mux.HandleFunc("POST /api/v1/admin/version-rule", api.AdminSetVersionRule)
+	// Bundle 299: LinkUp from the server (owner page, public page, phones).
+	mux.HandleFunc("GET /api/v1/admin/apk299", api.AdminAPK299)
+	mux.HandleFunc("POST /api/v1/admin/apk299", api.AdminAPK299Upload)
+	mux.HandleFunc("DELETE /api/v1/admin/apk299", api.AdminAPK299Delete)
+	mux.HandleFunc("GET /api/v1/app/latest", api.AppLatest299)
+	for _, p := range []string{"/download", "/Download", "/linkup", "/LinkUp"} {
+		mux.HandleFunc("GET "+p, api.LinkupPage299)
+		mux.HandleFunc("GET "+p+"/{$}", api.LinkupPage299)
+		mux.HandleFunc("GET "+p+"/{file}", api.LinkupFile299)
+	}
+	mux.HandleFunc("GET /{$}", api.RootRedirect299)
 	// Bundle 214: app users as admins (crown, no admin login in the app).
 	mux.HandleFunc("POST /api/v1/admin/user-admin", api.AdminSetUserAdmin)
 	mux.HandleFunc("POST /api/v1/admin/device-session", api.AdminDeviceSession)
@@ -331,6 +342,11 @@ func main() {
 	if requireTLS && (certFile == "" || keyFile == "") {
 		log.Fatal("LOCALLINK_REQUIRE_TLS=true requires LOCALLINK_TLS_CERT and LOCALLINK_TLS_KEY")
 	}
+
+	// Bundle 299 N: port 80 + linkup.local (each only logs when it can't start).
+	api.CleanAPKTemp299()
+	stopShort299 := startShortNames299(srv, certFile != "" && keyFile != "")
+	defer stopShort299()
 
 	go func() {
 		if certFile != "" && keyFile != "" {

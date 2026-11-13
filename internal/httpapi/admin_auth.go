@@ -303,8 +303,22 @@ func (a *API) authorizeAdminSession(r *http.Request) (AdminAccount, bool) {
 	if out.UserID != "" && !a.deviceAdminAllowed(out.UserID, out.DeviceID) {
 		return AdminAccount{}, false
 	}
-	_, _ = a.store.DB().Exec(`UPDATE admin_sessions SET last_seen_at=? WHERE token_hash=? AND revoked_at IS NULL`, now, tokenHash(token))
+	// Bundle 299 S: write last_seen once a minute, not on every request
+	// (the panel makes many calls; each write waited for the one DB line).
+	if adminLastSeenStale299(lastSeen, nowTime) {
+		_, _ = a.store.DB().Exec(`UPDATE admin_sessions SET last_seen_at=? WHERE token_hash=? AND revoked_at IS NULL`, now, tokenHash(token))
+	}
 	return out, true
+}
+
+// adminLastSeenStale299: true when last_seen is a minute old (or unreadable).
+func adminLastSeenStale299(lastSeen string, now time.Time) bool {
+	t, err := time.Parse(time.RFC3339Nano, lastSeen)
+	if err != nil {
+		return true
+	}
+	d := now.Sub(t)
+	return d >= time.Minute || d < 0
 }
 
 func adminPermission(role, permission string) bool {
