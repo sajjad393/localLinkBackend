@@ -1282,35 +1282,42 @@ LL.views = {};
   // from what phones report (216g) plus their server link (216h link-map).
   const mapView = { x: 0, y: 0, k: 1, filter: 'all', pick: '' };
 
-  function layout216(nodes, edges) {
-    const W = 1000; const H = 700;
-    const pos = { server: { x: W / 2, y: 110, fixed: true } };
+  // Bundle 292 (TODO_292, mock web_map_292): server top centre, online
+  // phones in rows under it (130 px apart, a small 26 px bow, a new row when
+  // the stage width at 100 % is full), offline phones in rows under an
+  // "OFFLINE" line. The world size comes from the rows (was a fixed 1000 x 700
+  // with the offline row at the very bottom, so the default zoom fell to 0.5).
+  // pos.box (not enumerable) = the world size + the bounds apart291 keeps to.
+  function layout216(nodes, edges, stageW) {
+    const GAP = 130; const ROW = 112; const BOW = 26;
+    const sw = Math.max(320, Number(stageW) || 794);
+    const perRow = Math.max(2, Math.floor((sw - 60) / GAP));
+    const W = Math.max(sw, Math.min(Math.max(1, nodes.length), perRow) * GAP + 60 + GAP / 2);
+    const cx = W / 2;
+    const pos = { server: { x: cx, y: 58, fixed: true } };
     const online = nodes.filter((n) => n.online);
     const offline = nodes.filter((n) => !n.online);
-    online.forEach((n, i) => {
-      const a = Math.PI * (0.15 + 0.7 * ((i + 0.5) / Math.max(1, online.length)));
-      pos[n.device_id] = { x: W / 2 - Math.cos(a) * 330, y: 110 + Math.sin(a) * 300 };
-    });
-    offline.forEach((n, i) => {
-      pos[n.device_id] = { x: 120 + ((i + 0.5) / Math.max(1, offline.length)) * (W - 240), y: H - 90 };
-    });
-    // A few relaxation steps keep linked phones near each other without overlap.
-    const ids = nodes.map((n) => n.device_id);
-    for (let step = 0; step < 120; step += 1) {
-      ids.forEach((a) => ids.forEach((b) => {
-        if (a >= b) return;
-        const p = pos[a]; const q = pos[b];
-        const dx = q.x - p.x; const dy = q.y - p.y; const d = Math.max(1, Math.hypot(dx, dy));
-        if (d < 120) { const f = (120 - d) / 2 / d; p.x -= dx * f; p.y -= dy * f; q.x += dx * f; q.y += dy * f; }
-      }));
-      edges.forEach((e) => {
-        if (e.from === 'server' || !pos[e.from] || !pos[e.to]) return;
-        const p = pos[e.from]; const q = pos[e.to];
-        const dx = q.x - p.x; const dy = q.y - p.y; const d = Math.max(1, Math.hypot(dx, dy));
-        if (d > 200) { const f = (d - 200) * 0.02 / d; p.x += dx * f; p.y += dy * f; q.x -= dx * f; q.y -= dy * f; }
-      });
-      ids.forEach((id) => { const p = pos[id]; p.x = Math.min(W - 60, Math.max(60, p.x)); p.y = Math.min(H - 70, Math.max(190, p.y)); });
-    }
+    let y = 58 + 148;
+    const put = (list, bow) => {
+      let above = [];
+      for (let r = 0; r * perRow < list.length; r += 1) {
+        const row = list.slice(r * perRow, (r + 1) * perRow);
+        const w = (row.length - 1) * GAP;
+        let xs = row.map((_, i) => cx - w / 2 + i * GAP);
+        // a row under another never puts a phone right under one (stagger).
+        if (xs.some((x) => above.some((a) => Math.abs(a - x) < 1))) xs = xs.map((x) => x + GAP / 2);
+        row.forEach((n, i) => {
+          const t = row.length > 1 ? (i / (row.length - 1)) * 2 - 1 : 0;
+          pos[n.device_id] = { x: xs[i], y: y + (bow ? BOW * (1 - t * t) : 0) };
+        });
+        above = xs;
+        y += ROW + (bow ? BOW : 0);
+      }
+    };
+    put(online, true);
+    if (offline.length) { y += BOW; put(offline, false); }
+    const H = Math.max(y - ROW + 70, 58 + 148 + 70);
+    Object.defineProperty(pos, 'box', { value: { W, H, top: 58 + 90, bottom: H - 40 }, enumerable: false });
     return pos;
   }
 
@@ -1338,12 +1345,38 @@ LL.views = {};
     return { k, x: (stageW - bw * k) / 2 - minX * k, y: (stageH - bh * k) / 2 - minY * k };
   }
 
+  // Bundle 292 (TODO_292): the default zoom. Everybody's fit, kept between
+  // 100 % and 140 % so names stay readable (12 px or more). When everybody
+  // does not fit at 100 %: 100 %, centred, the top 18 px from the edge
+  // (the "+N more" pill tells who is outside). The fit button keeps fit217.
+  function fit292(points, stageW, stageH) {
+    if (!points.length || !stageW || !stageH) return null;
+    const xs = points.map((p) => p.x); const ys = points.map((p) => p.y);
+    const minX = Math.min(...xs) - 70; const maxX = Math.max(...xs) + 70;
+    const minY = Math.min(...ys) - 50; const maxY = Math.max(...ys) + 80;
+    const bw = Math.max(1, maxX - minX); const bh = Math.max(1, maxY - minY);
+    const want = Math.min(1.4, Math.min(stageW / bw, stageH / bh));
+    const over = want < 1;
+    const k = Math.max(1, want);
+    return { k, x: (stageW - bw * k) / 2 - minX * k, y: over ? 18 - minY * k : (stageH - bh * k) / 2 - minY * k };
+  }
+
+  // Bundle 292: how many of these points are outside the visible stage.
+  function outside292(points, view, stageW, stageH) {
+    return points.filter((p) => {
+      const x = p.x * view.k + view.x; const y = p.y * view.k + view.y;
+      return x < 0 || x > stageW || y < 0 || y > stageH - 40;
+    }).length;
+  }
+
   // Bundle 291 (TODO_291 B): no phone on top of another, no line under a
   // third phone's photo, no two lines on top of each other.
   // B-1: push phones apart (kept spots stay unless two kept ones overlap).
   function apart291(pos, ids, kept) {
-    const W = 1000; const H = 700;
-    const gap = Math.min(120, Math.max(64, Math.sqrt((880 * 440) / Math.max(1, ids.length)) * 0.7));
+    // Bundle 292: the bounds of the 292 layout (pos.box); old callers 1000 x 700.
+    const box = pos.box || { W: 1000, H: 700, top: 190, bottom: 630 };
+    const W = box.W; const top = box.top; const bottom = box.bottom;
+    const gap = Math.min(120, Math.max(64, Math.sqrt(((W - 120) * Math.max(120, bottom - top)) / Math.max(1, ids.length)) * 0.7));
     const srv = pos.server;
     for (let step = 0; step < 400; step += 1) {
       let moved = false;
@@ -1369,7 +1402,7 @@ LL.views = {};
           const dx = p.x - srv.x; const dy = p.y - srv.y; const d = Math.max(1, Math.hypot(dx, dy));
           if (d < gap) { p.x += (dx / d) * (gap - d); p.y += (dy / d) * (gap - d); moved = true; }
         }
-        p.x = Math.min(W - 60, Math.max(60, p.x)); p.y = Math.min(H - 70, Math.max(190, p.y));
+        p.x = Math.min(W - 60, Math.max(60, p.x)); p.y = Math.min(bottom, Math.max(top, p.y));
       });
       if (!moved) break;
     }
@@ -1382,7 +1415,7 @@ LL.views = {};
       const p = pos[id];
       if (!p || far(id, p.x, p.y)) return;
       let best = null;
-      for (let y = 190; y <= H - 70; y += gap * 0.5) {
+      for (let y = top; y <= bottom; y += gap * 0.5) {
         for (let x = 60; x <= W - 60; x += gap * 0.5) {
           if (!far(id, x, y)) continue;
           const dd = Math.hypot(x - p.x, y - p.y);
@@ -1470,7 +1503,10 @@ LL.views = {};
         if (c || k === 'server') chips.push({ value: k, label: `${label} ${c}` });
       });
       mapView.last = result.data;
-      const pos = layout216(nodes, edges);
+      // Bundle 292: rows wrap at the stage width (last measured; first draw: page - side panel).
+      const guessW = (el.clientWidth || 1070) - (window.innerWidth > 1100 ? 288 : 0) - 2;
+      const usedW = mapView.stageW || guessW;
+      const pos = layout216(nodes, edges, usedW);
       // Bundle 274 (W-2): a redraw keeps phones where they were (same online
       // state); only new phones get a new spot, only the lines change.
       const keep = mapView.pos || {};
@@ -1516,40 +1552,51 @@ LL.views = {};
       const nodeHtml = nodes.map((n) => {
         const p = pos[n.device_id];
         const name = ui.name276(n); // Bundle 276
-        const cls = ['map216-node', shown(n) ? '' : 'dim', mapView.pick && mapView.pick === n.user_id ? 'sel' : ''].join(' ');
+        const cls = ['map216-node', shown(n) ? '' : 'dim', n.online ? '' : 'off292', mapView.pick && mapView.pick === n.user_id ? 'sel' : ''].join(' ');
         return `<div class="${cls}" style="left:${p.x}px;top:${p.y}px" data-map-pick="${ui.esc(n.user_id || '')}" title="${ui.esc(ui.phone276(n.device_name, name))}">
           ${ui.avatar216({ userId: n.user_id, name, hasAvatar: n.has_avatar, admin: n.admin_role || false, blocked: n.blocked, size: 48 })}
           <span class="tag">${ui.esc(name)}</span></div>`;
       }).join('');
+      // Bundle 292: the "OFFLINE" line, 52 px over the highest offline phone,
+      // only when it stays under every online phone.
+      const onY = nodes.filter((n) => n.online && pos[n.device_id]).map((n) => pos[n.device_id].y);
+      const offPts = nodes.filter((n) => !n.online && pos[n.device_id]).map((n) => pos[n.device_id]);
+      let offLine = '';
+      if (offPts.length) {
+        const ly = Math.min(...offPts.map((p) => p.y)) - 52;
+        const allX = nodes.map((n) => pos[n.device_id]).filter(Boolean).map((p) => p.x);
+        const lx = Math.min(...allX) - 50; const lw = Math.max(...allX) + 50 - lx;
+        if (!onY.length || ly > Math.max(...onY) + 40) offLine = `<div class="map292-off" style="left:${lx}px;top:${ly}px;width:${lw}px"><span>OFFLINE</span></div>`;
+      }
       const sideList = nodes.filter((n) => !mapView.pick || n.user_id === mapView.pick);
       const legend = Object.keys(ui.LINKS_216).filter((k) => edges.some((e) => e.link === k))
         .map((k) => `<span><i style="background:${ui.LINKS_216[k].color}"></i>${ui.esc(ui.LINKS_216[k].label)}</span>`).join('')
         + (nodes.some((n) => n.blocked) ? '<span><i class="dash217"></i>Blocked \u00b7 relays only</span>' : '');
       el.innerHTML = `
         <div class="section">
-          <div class="bar216">${ui.chips216(chips, mapView.filter, 'data-map-filter')}${ctx.liveBadge ? ctx.liveBadge() : ''}</div>
+          <div class="bar216">${ui.chips216(chips, mapView.filter, 'data-map-filter')}${ctx.liveBadge ? ctx.liveBadge() : ''}<div class="map216-legend">${legend}</div></div>
           <div class="map216">
             <div class="map217-wrap">
             <div class="map216-stage" data-map-stage>
-              <div class="map216-world" data-map-world style="transform:translate(${mapView.x}px,${mapView.y}px) scale(${mapView.k})">
-                <svg width="1000" height="700" aria-hidden="true">${lines}</svg>
+              <div class="map216-world" data-map-world style="width:${pos.box.W}px;height:${pos.box.H}px;transform:translate(${mapView.x}px,${mapView.y}px) scale(${mapView.k})">
+                <svg width="${pos.box.W}" height="${pos.box.H}" aria-hidden="true">${lines}</svg>${offLine}
                 <div class="map216-node" style="left:${pos.server.x}px;top:${pos.server.y}px">
                   <span class="map216-server">${ui.icon('i-server')}</span><span class="tag" style="background:none">Server</span></div>
                 ${nodeHtml}
               </div>
-              <div class="map216-zoom"><button data-map-zoom="in" aria-label="Zoom in">+</button><button data-map-zoom="out" aria-label="Zoom out">\u2212</button><button data-map-zoom="fit" aria-label="Fit everyone">${ui.icon('i-fit')}</button></div>
+              <div class="map216-zoom"><button data-map-zoom="in" aria-label="Zoom in">+</button><button data-map-zoom="out" aria-label="Zoom out">\u2212</button><button data-map-zoom="fit" aria-label="Fit everyone">${ui.icon('i-fit')}</button><span class="map292-pct" data-map-pct>${Math.round(mapView.k * 100)}%</span></div>
+              <div class="map292-more" data-map-more hidden></div>
               ${nodes.length ? '' : '<div class="empty216" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)">No phones yet.</div>'}
             </div>
-            <div class="map216-legend">${legend}</div>
             </div>
             ${ui.panel({
-              body: `<div class="map216-side"><h2>Phones (${sideList.length})</h2>
+              body: `<div class="map216-side"><h2>Phones (${sideList.length})</h2><div class="map292-rows">
                 ${sideList.map((n) => {
                   const k = linkOf(n);
                   const pill = k === 'blocked' ? ui.pill216('Blocked', 'red')
                     : (ui.LINKS_216[k] ? ui.pill216(ui.LINKS_216[k].label, ui.LINKS_216[k].tone) : ui.pill216('Offline', 'grey'));
                   return `<div class="map216-row">${ui.person216({ userId: n.user_id, name: ui.name276(n), sub: ui.phone276(n.device_name, ui.name276(n)), hasAvatar: n.has_avatar, admin: n.admin_role || false, blocked: n.blocked, size: 30 })}${pill}</div>`;
-                }).join('')}
+                }).join('')}</div>
                 <div class="type-caption" style="margin-top:14px">${mapView.pick ? '<a href="#" data-map-pick="">Show everyone</a>' : 'Click a person to see their phones.'}</div></div>`,
             })}
           </div>
@@ -1557,7 +1604,23 @@ LL.views = {};
 
       const world = el.querySelector('[data-map-world]');
       const stage = el.querySelector('[data-map-stage]');
-      const apply = () => { world.style.transform = `translate(${mapView.x}px,${mapView.y}px) scale(${mapView.k})`; };
+      // Bundle 292: the zoom text and the "+N more" pill follow every move.
+      const pct = el.querySelector('[data-map-pct]');
+      const more = el.querySelector('[data-map-more]');
+      mapView.stageW = stage.clientWidth || mapView.stageW;
+      // First draw with a guessed width that gives another row length: lay out once more.
+      const row292 = (w) => Math.max(2, Math.floor((Math.max(320, w) - 60) / 130));
+      const relayout = !mapView.relaid && !!stage.clientWidth && row292(usedW) !== row292(stage.clientWidth);
+      mapView.relaid = relayout;
+      const apply = () => {
+        world.style.transform = `translate(${mapView.x}px,${mapView.y}px) scale(${mapView.k})`;
+        if (pct) pct.textContent = `${Math.round(mapView.k * 100)}%`;
+        if (more) {
+          const n = outside292(nodes.filter(shown).map((x) => pos[x.device_id]).filter(Boolean), mapView, stage.clientWidth, stage.clientHeight);
+          more.hidden = n === 0;
+          more.textContent = n ? `+${n} more \u00b7 drag the map, or press the fit button to see everyone` : '';
+        }
+      };
       const zoomAt = (factor, cx, cy) => {
         const k = Math.min(3, Math.max(0.4, mapView.k * factor));
         mapView.x = cx - (cx - mapView.x) * (k / mapView.k);
@@ -1621,10 +1684,18 @@ LL.views = {};
         if (!box) return;
         mapView.x = box.x; mapView.y = box.y; mapView.k = box.k; apply();
       };
+      // Bundle 292: the default view = fit292 (100 - 140 %), unless the fit
+      // button asked for everybody (fitAll, until a filter change or a new visit).
+      const autoFit = () => {
+        if (mapView.fitAll) { fit(); return; }
+        const box = fit292(nodes.filter(shown).map((n) => pos[n.device_id]).filter(Boolean).concat([pos.server]), stage.clientWidth, stage.clientHeight);
+        if (!box) return;
+        mapView.x = box.x; mapView.y = box.y; mapView.k = box.k; apply();
+      };
       el.querySelectorAll('[data-map-zoom]').forEach((b) => b.addEventListener('click', () => {
         const r = stage.getBoundingClientRect();
         const z = b.getAttribute('data-map-zoom');
-        if (z === 'fit') { mapView.fitted = false; fit(); return; }
+        if (z === 'fit') { mapView.fitted = false; mapView.fitAll = true; fit(); return; }
         mapView.fitted = true;
         zoomAt(z === 'in' ? 1.25 : 0.8, r.width / 2, r.height / 2);
       }));
@@ -1643,17 +1714,18 @@ LL.views = {};
       let resizeTimer = 0;
       mapView.offResize = () => {
         clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(() => { if (!mapView.fitted && stage.isConnected) fit(); }, 150);
+        resizeTimer = setTimeout(() => { if (!mapView.fitted && stage.isConnected) autoFit(); }, 150);
       };
       window.addEventListener('resize', mapView.offResize);
-      el.querySelectorAll('[data-map-filter]').forEach((b) => b.addEventListener('click', () => { mapView.filter = b.getAttribute('data-map-filter'); mapView.fitted = false; this.mount(el, ctx, true, mapView.last); }));
+      el.querySelectorAll('[data-map-filter]').forEach((b) => b.addEventListener('click', () => { mapView.filter = b.getAttribute('data-map-filter'); mapView.fitted = false; mapView.fitAll = false; this.mount(el, ctx, true, mapView.last); }));
       el.querySelectorAll('[data-map-pick]').forEach((b) => b.addEventListener('click', (ev) => {
         ev.preventDefault();
         const id = b.getAttribute('data-map-pick');
         mapView.pick = id && mapView.pick !== id ? id : '';
         this.mount(el, ctx, true, mapView.last);
       }));
-      if (!quiet || !mapView.fitted) fit();
+      if (!quiet) mapView.fitAll = false;
+      if (!quiet || !mapView.fitted) autoFit(); else apply(); // Bundle 292
       // Bundle 274 (W-1): redraw on every live frame while the Map is open.
       if (!quiet && !liveData && el.isConnected) {
         ctx.live((msg) => {
@@ -1664,6 +1736,7 @@ LL.views = {};
         });
       }
       if (ctx.liveSync) ctx.liveSync();
+      if (relayout) { mapView.pos = {}; this.mount(el, ctx, true, mapView.last); } // Bundle 292
     },
   };
 

@@ -1134,16 +1134,16 @@ td { height: 52px; border-bottom: 1px solid var(--border); }
 
 /* W3 map */
 .map216 { display: grid; grid-template-columns: minmax(0, 1fr) 276px; gap: 12px; }
-.map216-stage { position: relative; height: clamp(320px, 52vh, 620px); overflow: hidden; border-radius: 12px; border: 1px solid var(--border); background: #0b0f14; background-image: radial-gradient(#1c232d 1px, transparent 1px); background-size: 22px 22px; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.map216-stage { position: relative; height: max(380px, calc(100vh - 150px)); overflow: hidden; border-radius: 12px; border: 1px solid var(--border); background: #0b0f14; background-image: radial-gradient(#1c232d 1px, transparent 1px); background-size: 22px 22px; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
 .map216-stage.drag { cursor: grabbing; }
 .map216-world { position: absolute; left: 0; top: 0; width: 1000px; height: 700px; transform-origin: 0 0; }
 .map216-world > svg { position: absolute; left: 0; top: 0; overflow: visible; }
 .map216-node { position: absolute; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; gap: 6px; cursor: pointer; }
-.map216-node .tag { font: 600 11px var(--font-sans); color: var(--text-primary); background: #21262d; padding: 3px 8px; border-radius: 10px; white-space: nowrap; }
+.map216-node .tag { font: 600 12px var(--font-sans); color: var(--text-primary); background: #21262d; padding: 3px 8px; border-radius: 10px; white-space: nowrap; }
 .map216-node.dim { opacity: .28; }
 .map216-node.sel .av216 { outline: 2px solid #2f6bff; outline-offset: 4px; }
 .map216-server { width: 52px; height: 52px; border-radius: 50%; background: #16274a; border: 2px solid #4c8dff; display: flex; align-items: center; justify-content: center; color: #7aa7ff; }
-.map216-legend { position: absolute; left: 18px; bottom: 14px; display: flex; gap: 26px; font-size: 11px; color: var(--text-secondary); }
+.map216-legend { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 11px; color: var(--text-secondary); } /* Bundle 292: in the top bar */
 .map216-legend i { display: inline-block; width: 22px; height: 2px; vertical-align: middle; margin-right: 8px; }
 .map216-zoom { position: absolute; right: 12px; top: 12px; display: flex; flex-direction: column; gap: 6px; }
 .map216-zoom button { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text-primary); cursor: pointer; font: 600 15px var(--font-sans); }
@@ -1151,7 +1151,7 @@ td { height: 52px; border-bottom: 1px solid var(--border); }
 .map216-side h2 { font-size: 15px; font-weight: 600; margin: 0 0 10px; }
 .map216-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 52px; }
 
-@media (max-width: 1100px) { .map216 { grid-template-columns: 1fr; } .tiles216 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1100px) { .map216 { grid-template-columns: 1fr; } .map216 > .panel { height: auto; } .map292-rows { overflow: visible; } .tiles216 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 /* 216: header keeps only photo, name, level, bell and Sign out (theme stays in the menu). */
 #search-wrap, #theme-button { display: none; }
 
@@ -1179,6 +1179,23 @@ td { height: 52px; border-bottom: 1px solid var(--border); }
 .map216-zoom button { display: flex; align-items: center; justify-content: center; padding: 0; }
 .map216-zoom button .icon { width: 16px; height: 16px; }
 .map216-legend i.dash217 { height: 0; background: none; border-top: 2px dashed #8b949e; }
+/* Bundle 292 (TODO_292): the map fills the page; the Phones panel is as high
+   and its list scrolls; offline phones grey under an OFFLINE line; zoom text;
+   "+N more" pill. */
+.map216 > .panel { height: max(380px, calc(100vh - 150px)); display: flex; flex-direction: column; overflow: hidden; }
+.map216 > .panel > .map216-side { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.map292-rows { flex: 1; min-height: 0; overflow-y: auto; margin-right: -8px; padding-right: 8px; }
+.map216-node.off292 { opacity: .55; }
+.map216-node.off292 .av216 { filter: grayscale(1); }
+.map216-node.off292.dim { opacity: .2; }
+.map292-off { position: absolute; border-top: 1px dashed #2b3340; pointer-events: none; }
+.map292-off span { position: absolute; left: 0; top: -8px; padding: 0 8px 0 0; background: #0b0f14; font: 600 10px var(--font-sans); letter-spacing: .05em; color: var(--text-tertiary); }
+.map292-pct { width: 30px; margin-top: 2px; text-align: center; font: 600 10px var(--font-sans); color: var(--text-tertiary); pointer-events: none; }
+.map292-more { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 5px 12px; border-radius: 14px; border: 1px solid var(--border); background: rgba(29, 34, 43, .85); font: 600 11px var(--font-sans); color: var(--text-secondary); pointer-events: none; }
+.map292-more[hidden] { display: none; }
+:root:not([data-theme="dark"]) .map292-off { border-top-color: #d0d7de; }
+:root:not([data-theme="dark"]) .map292-off span { background: #f6f8fa; }
+:root:not([data-theme="dark"]) .map292-more { background: rgba(255, 255, 255, .9); }
 #identity-initial.has-crown .av216-crown { top: 0; transform: translate(-50%, calc(-100% + .4px)); }
 @media (prefers-reduced-motion: reduce) {
   .link217 .flow { animation: none !important; }
@@ -1274,7 +1291,7 @@ td { height: 52px; border-bottom: 1px solid var(--border); }
   .tile216 b { font-size: 22px; }
 
   /* map */
-  .map216-legend { position: static; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 12px 2px 0; }
+  .map216-legend { position: static; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 2px; flex-basis: 100%; }
 }
 
 /* Bundle 218: "Joined from offline · date" in Manage */

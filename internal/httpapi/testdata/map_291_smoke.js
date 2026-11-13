@@ -43,7 +43,9 @@ for (const n of [3, 6, 12, 30, 60]) {
   ids.forEach((id, i) => { if (i % 2) pos[id] = { x: 300 + (i % 4), y: 300 }; }); // half stacked on purpose
   m.apart291(pos, ids, new Set(ids.filter((_, i) => i % 2)));
   const gg = minGap(pos, ids);
-  const inside = ids.every((id) => pos[id].x >= 60 && pos[id].x <= 940 && pos[id].y >= 190 && pos[id].y <= 630);
+  // Bundle 292: the bounds come from the layout (pos.box), not a fixed 1000 x 700.
+  const bx = pos.box || { W: 1000, top: 190, bottom: 630 };
+  const inside = ids.every((id) => pos[id].x >= 60 && pos[id].x <= bx.W - 60 && pos[id].y >= bx.top && pos[id].y <= bx.bottom);
   ok(gg >= 63 && inside, n + ' phones: min gap ' + gg.toFixed(1) + ', inside=' + inside);
 }
 
