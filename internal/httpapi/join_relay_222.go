@@ -371,6 +371,11 @@ func (a *API) noteOfflineSeen222(reporter string, list []offlineSeen222) {
 		}
 		var joined int
 		_ = a.store.DB().QueryRow(`SELECT COUNT(*) FROM devices WHERE id=? AND user_id IS NOT NULL AND user_id<>''`, dev).Scan(&joined)
+		// Bundle 279 (B-1): an offline id that was already published (linked
+		// in offline_ids to a live user) is on the server - not a new row.
+		if joined == 0 {
+			_ = a.store.DB().QueryRow(`SELECT COUNT(*) FROM offline_ids o JOIN users u ON u.id=o.user_id WHERE o.offline_id=? AND u.status IN ('active','suspended')`, strings.TrimSpace(x.UserID)).Scan(&joined)
+		}
 		if joined > 0 {
 			_, _ = a.store.DB().Exec(`DELETE FROM seen_offline_accounts WHERE device_id=?`, dev)
 			continue
@@ -418,7 +423,11 @@ const offlineHideAfter238 = 30 * 24 * time.Hour
 func (a *API) notOnServer222() []notOnServerRow222 {
 	rows, err := a.store.DB().Query(`SELECT s.device_id,s.username,s.name,s.phone_model,COALESCE(u.username,s.seen_by_device),s.link,s.first_seen,s.last_seen,s.carriers
 		FROM seen_offline_accounts s LEFT JOIN devices d ON d.id=s.seen_by_device LEFT JOIN users u ON u.id=d.user_id
+		WHERE NOT EXISTS (SELECT 1 FROM devices j WHERE j.id=s.device_id AND j.user_id IS NOT NULL AND j.user_id<>'')
+		AND NOT EXISTS (SELECT 1 FROM offline_ids o JOIN users ou ON ou.id=o.user_id WHERE o.device_id=s.device_id AND ou.status IN ('active','suspended'))
 		ORDER BY s.last_seen DESC LIMIT 200`)
+	// Bundle 279 (B-2): rows written before the phone joined (or before its
+	// offline id was linked) are left out at once - no wait for a new report.
 	if err != nil {
 		return nil
 	}
