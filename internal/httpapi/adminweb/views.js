@@ -1338,6 +1338,111 @@ LL.views = {};
     return { k, x: (stageW - bw * k) / 2 - minX * k, y: (stageH - bh * k) / 2 - minY * k };
   }
 
+  // Bundle 291 (TODO_291 B): no phone on top of another, no line under a
+  // third phone's photo, no two lines on top of each other.
+  // B-1: push phones apart (kept spots stay unless two kept ones overlap).
+  function apart291(pos, ids, kept) {
+    const W = 1000; const H = 700;
+    const gap = Math.min(120, Math.max(64, Math.sqrt((880 * 440) / Math.max(1, ids.length)) * 0.7));
+    const srv = pos.server;
+    for (let step = 0; step < 400; step += 1) {
+      let moved = false;
+      for (let i = 0; i < ids.length; i += 1) {
+        for (let j = i + 1; j < ids.length; j += 1) {
+          const a = ids[i]; const b = ids[j]; const p = pos[a]; const q = pos[b];
+          if (!p || !q) continue;
+          let dx = q.x - p.x; let dy = q.y - p.y; let d = Math.hypot(dx, dy);
+          if (d >= gap - 0.5) continue;
+          if (d < 1) { const ang = (i + j * 2.399963) % (Math.PI * 2); dx = Math.cos(ang); dy = Math.sin(ang); d = 1; }
+          const push = (gap - d) / d * (step < 300 ? 0.6 : 1);
+          const ka = kept.has(a); const kb = kept.has(b);
+          const wa = ka && !kb ? 0 : (!ka && kb ? 1 : 0.5);
+          p.x -= dx * push * wa; p.y -= dy * push * wa;
+          q.x += dx * push * (1 - wa); q.y += dy * push * (1 - wa);
+          moved = true;
+        }
+      }
+      ids.forEach((id) => {
+        const p = pos[id];
+        if (!p) return;
+        if (srv) {
+          const dx = p.x - srv.x; const dy = p.y - srv.y; const d = Math.max(1, Math.hypot(dx, dy));
+          if (d < gap) { p.x += (dx / d) * (gap - d); p.y += (dy / d) * (gap - d); moved = true; }
+        }
+        p.x = Math.min(W - 60, Math.max(60, p.x)); p.y = Math.min(H - 70, Math.max(190, p.y));
+      });
+      if (!moved) break;
+    }
+    // Still on top of someone (a crowded map): the nearest free spot on a grid,
+    // new phones first.
+    const far = (id, x, y) => ids.every((o) => o === id || !pos[o] || Math.hypot(pos[o].x - x, pos[o].y - y) >= gap - 1)
+      && (!srv || Math.hypot(srv.x - x, srv.y - y) >= gap - 1);
+    const order = ids.filter((id) => !kept.has(id)).concat(ids.filter((id) => kept.has(id)));
+    order.forEach((id) => {
+      const p = pos[id];
+      if (!p || far(id, p.x, p.y)) return;
+      let best = null;
+      for (let y = 190; y <= H - 70; y += gap * 0.5) {
+        for (let x = 60; x <= W - 60; x += gap * 0.5) {
+          if (!far(id, x, y)) continue;
+          const dd = Math.hypot(x - p.x, y - p.y);
+          if (!best || dd < best.dd) best = { x, y, dd };
+        }
+      }
+      if (best) { p.x = best.x; p.y = best.y; }
+    });
+    return pos;
+  }
+
+  // Same control point as arc217 (kept in step with it).
+  function ctl291(p, q, C, k) {
+    const dx = q.x - p.x; const dy = q.y - p.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const mid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+    let n = { x: -dy / len, y: dx / len };
+    const ox = mid.x - C.x; const oy = mid.y - C.y;
+    if (Math.hypot(ox, oy) < 1) { if (n.y > 0) n = { x: -n.x, y: -n.y }; } else if (ox * n.x + oy * n.y < 0) n = { x: -n.x, y: -n.y };
+    return { x: mid.x + n.x * k * len, y: mid.y + n.y * k * len };
+  }
+
+  function bez291(p, c, q, t) {
+    const u = 1 - t;
+    return { x: u * u * p.x + 2 * u * t * c.x + t * t * q.x, y: u * u * p.y + 2 * u * t * c.y + t * t * q.y };
+  }
+
+  // The centre mirrored through the middle of p-q: arc217 then bows the other way.
+  function flip291(p, q, C) {
+    const mid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+    if (Math.hypot(mid.x - C.x, mid.y - C.y) < 1) return { x: mid.x, y: mid.y - 10 };
+    return { x: 2 * mid.x - C.x, y: 2 * mid.y - C.y };
+  }
+
+  // B-3: first try the usual bow; if it runs under a third phone (34 px) or
+  // lies on another line (middles < 16 px), try the other side / other bows.
+  function route291(p, q, C, ks, first, obstacles, mids) {
+    const R = 34; const M = 16;
+    const tries = [];
+    ks.forEach((k) => { tries.push({ C, k }); tries.push({ C: flip291(p, q, C), k }); });
+    let best = null;
+    for (let i = 0; i < tries.length; i += 1) {
+      const t = tries[i];
+      const c = ctl291(p, q, t.C, t.k);
+      let clear = Infinity;
+      for (let s = 1; s < 24; s += 1) {
+        const b = bez291(p, c, q, s / 24);
+        obstacles.forEach((o) => { clear = Math.min(clear, Math.hypot(b.x - o.x, b.y - o.y)); });
+      }
+      const m = bez291(p, c, q, 0.5);
+      let near = Infinity;
+      mids.forEach((o) => { near = Math.min(near, Math.hypot(m.x - o.x, m.y - o.y)); });
+      const score = Math.min(clear / R, near / M);
+      if (!best || score > best.score + 1e-9) best = { score, i, m, t };
+      if (clear >= R && near >= M) { best = { score, i, m, t }; break; }
+    }
+    mids.push(best.m);
+    return best.i === 0 ? first : arc217(p, q, best.t.C, best.t.k);
+  }
+
   const map = {
     id: 'map',
     title: 'Map',
@@ -1354,6 +1459,10 @@ LL.views = {};
       const nodes = Array.isArray(result.data.nodes) ? result.data.nodes : [];
       const edges = Array.isArray(result.data.edges) ? result.data.edges : [];
       const linkOf = (n) => (n.blocked ? 'blocked' : (n.link || 'offline'));
+      // Bundle 291 (B-2): one fixed order (server phones, other links,
+      // blocked, offline; then name) so the map and the list never jump.
+      const rank291 = (n) => { const k = linkOf(n); return k === 'server' ? 0 : (k === 'offline' ? 3 : (k === 'blocked' ? 2 : 1)); };
+      nodes.sort((a, b) => rank291(a) - rank291(b) || ui.name276(a).localeCompare(ui.name276(b)) || String(a.device_id).localeCompare(String(b.device_id)));
       const count = (k) => nodes.filter((n) => linkOf(n) === k).length;
       const chips = [{ value: 'all', label: `All ${nodes.length}` }];
       [['server', 'Server'], ['wifi_direct', 'Wi-Fi Direct'], ['mesh', 'Mesh'], ['lan', 'Local Wi-Fi'], ['blocked', 'Blocked']].forEach(([k, label]) => {
@@ -1365,7 +1474,9 @@ LL.views = {};
       // Bundle 274 (W-2): a redraw keeps phones where they were (same online
       // state); only new phones get a new spot, only the lines change.
       const keep = mapView.pos || {};
-      nodes.forEach((n) => { const o = keep[n.device_id]; if (o && o.online === !!n.online) pos[n.device_id] = { x: o.x, y: o.y }; });
+      const kept291 = new Set();
+      nodes.forEach((n) => { const o = keep[n.device_id]; if (o && o.online === !!n.online) { pos[n.device_id] = { x: o.x, y: o.y }; kept291.add(n.device_id); } });
+      apart291(pos, nodes.map((n) => n.device_id), kept291); // Bundle 291 (B-1)
       mapView.pos = {};
       nodes.forEach((n) => { const q = pos[n.device_id]; if (q) mapView.pos[n.device_id] = { x: q.x, y: q.y, online: !!n.online }; });
       const shown = (n) => mapView.filter === 'all' || linkOf(n) === mapView.filter;
@@ -1376,14 +1487,20 @@ LL.views = {};
       // phones only, with a smaller bow; server lines are unchanged.
       const phonePts = nodes.map((n) => pos[n.device_id]).filter(Boolean);
       const CP = phonePts.length ? phonePts.reduce((a, p) => ({ x: a.x + p.x / phonePts.length, y: a.y + p.y / phonePts.length }), { x: 0, y: 0 }) : C;
+      const mids291 = [];
       const lines = edges.map((e, i) => {
         const p = pos[e.from]; const q = pos[e.to];
         if (!p || !q) return '';
+        // Bundle 291 (B-3): every other phone (and the server, for phone lines) is in the way.
+        const in291 = nodes.filter((n) => n.device_id !== e.from && n.device_id !== e.to).map((n) => pos[n.device_id]).filter(Boolean);
+        if (e.from !== 'server' && pos.server) in291.push(pos.server);
         const to = nodes.find((n) => n.device_id === e.to) || {};
         const from = nodes.find((n) => n.device_id === e.from) || {};
         const blocked = !!(to.blocked || from.blocked);
         const dim = !(mapView.filter === 'all' || (shown(to) && (e.from === 'server' || shown(from))));
-        const d = e.from === 'server' ? arc217(p, q, C, 0.60) : arc217(p, q, CP, 0.25);
+        const first = e.from === 'server' ? arc217(p, q, C, 0.60) : arc217(p, q, CP, 0.25);
+        const d = e.from === 'server' ? route291(p, q, C, [0.60, 0.35, 0.85, 0.15], first, in291, mids291)
+          : route291(p, q, CP, [0.25, 0.45, 0.10], first, in291, mids291);
         if (blocked) {
           return `<g class="link217 blocked${dim ? ' dim' : ''}"><path class="base" d="${d}"/></g>`;
         }

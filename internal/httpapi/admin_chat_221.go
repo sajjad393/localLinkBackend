@@ -79,6 +79,10 @@ type answerAckBody struct {
 	At       string `json:"at"`
 }
 
+// Bundle 291 (TODO_291 A): what the web says when no phone of the chat has
+// sent its lock key yet (the app sends it by itself from 3.0.92 on).
+const noLockKeyText291 = "These phones have not sent their lock key yet. They send it by themselves when they open the new LinkUp and reach the server. Try again after that."
+
 // ------------------------------------------------------------ server key
 
 // answerBoxKey is the server's X25519 key that web requests are answered to.
@@ -133,7 +137,7 @@ func (a *API) makeChatCard(action string, admin AdminAccount, label, words, pare
 	}
 	sort.Slice(body.To, func(i, j int) bool { return body.To[i].K < body.To[j].K })
 	if len(body.To) == 0 {
-		return body, errors.New("no phone of this chat can be reached (no keys yet)")
+		return body, errors.New(noLockKeyText291)
 	}
 	body.Need = need
 	if need <= 0 || need > len(body.To) {
