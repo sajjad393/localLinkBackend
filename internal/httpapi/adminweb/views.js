@@ -2004,6 +2004,49 @@ LL.views = {};
     },
   };
 
+  // Bundle 307: one place that turns a chat request (server list row) into
+  // its live-card step. Same words as the app and the phone card:
+  // Sent -> 1 of 2 phones -> 12 of 40 parts -> Ready (or No messages).
+  // p = where the marker rides on the track (stops at 33 / 66 / 100).
+  function step307(q) {
+    const of = num(q && q.of);
+    const parts = Math.min(num(q && q.parts), of || num(q && q.parts));
+    const phones = Math.max(1, num(q && q.phones) || 2);
+    const reached = Math.min(phones, num(q && q.reached));
+    const from = String((q && q.from_name) || '');
+    if (q && q.empty) {
+      return { k: 'empty', p: 66.666, big: '<b class="m">No messages</b>', sub: 'No phone has this chat', chip: 'No messages', ring: '0', short: '\u2013', live: false };
+    }
+    if (q && q.state === 'cancelled') {
+      return { k: 'cancel', p: 0, big: '<b class="m">Cancelled</b>', sub: 'Request cancelled', chip: 'Cancelled', ring: '', short: '', live: false };
+    }
+    if ((of > 0 && parts >= of) || (q && q.state === 'done')) {
+      return { k: 'ready', p: 100, big: '<b class="g">Ready</b> to read', sub: of > 0 ? `Tap to open \u00b7 ${of} parts` : 'Opens on the admin phone',
+        chip: 'Ready', ring: '', short: 'Ready', live: !(q && (q.closed || q.opened)) && of > 0 };
+    }
+    if (parts > 0 && of > 0) {
+      return { k: 'coming', p: 66.666 + 33.333 * parts / of, big: `<b><span data-n307="${parts}">${parts}</span> of ${of}</b> parts`,
+        sub: from ? `Answer coming from ${from}'s phone` : 'Answer coming', chip: `${parts} of ${of}`,
+        ring: `${Math.round(100 * parts / of)}%`, short: `${parts}/${of}`, live: true };
+    }
+    if (reached > 0) {
+      return { k: 'reached', p: 33.333, big: `<b>${reached} of ${phones}</b> phones`, sub: 'Looking for the chat', chip: `${reached} of ${phones} phones`,
+        ring: `${reached}/${phones}`, short: `${reached}/${phones}`, live: true };
+    }
+    return { k: 'sent', p: 4, big: `<b>Sent</b> to ${phones} phone${phones === 1 ? '' : 's'}`,
+      sub: num(q && q.old_app) > 0 ? 'Old LinkUp on a phone \u00b7 it must update to answer' : 'Waiting for their phones',
+      chip: 'Sent', ring: '\u2026', short: 'Sent', live: true };
+  }
+
+  // Bundle 307: the avatar colour of the app (h*31+u, 8 colours).
+  const PAL307 = ['#2563EB', '#DB5C9A', '#F59E0B', '#22C55E', '#14A3A0', '#6366F1', '#EF4444', '#8B5CF6'];
+  function color307(name) {
+    let h = 0;
+    const s = String(name || '');
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0x7fffffff;
+    return PAL307[h % 8];
+  }
+
   // ----------------------------------------------------------------- conversations
   const conversations = {
     id: 'conversations',
@@ -2029,6 +2072,8 @@ LL.views = {};
         objectUrls: [],
         // Bundle 221
         requests: [], tab: 'all', shown: [], viewId: '', view: null, viewReq: null, sheet: null, del: null, menu: null, topMenu: false,
+        // Bundle 307: Chats / Requests switch, search, what the cards showed last (to animate only changes).
+        tab307: 'requests', q307: '', prev307: {}, drawn307: false,
       };
 
       const root = document.createElement('div');
@@ -2333,6 +2378,255 @@ LL.views = {};
           })}`;
       }
 
+      // ------------------------------------------------ Bundle 307: bold cards
+      const CHAT307 = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/></svg>';
+      const CHECK307 = (n) => `<svg viewBox="0 0 24 24" width="${n}" height="${n}" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+      const PLUS307 = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>';
+      const GROUP307 = (n) => `<svg viewBox="0 0 24 24" width="${n}" height="${n}" aria-hidden="true"><path fill="#fff" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>`;
+
+      function face307(name, size, ring) {
+        const n = String(name || '?').trim() || '?';
+        return `<span class="lt307${ring ? ' rg' : ''}" style="width:${size}px;height:${size}px;background:${color307(n)};font-size:${(size * 0.4).toFixed(1)}px">${ui.esc(n[0].toUpperCase())}</span>`;
+      }
+
+      // Two faces side by side, the second one overlapping (or a group icon).
+      function pair307(names, size, group) {
+        if (group || names.length < 2) {
+          return `<span class="pair307" style="width:${size}px;height:${size}px"><span class="lt307 grp" style="width:${size}px;height:${size}px;background:${color307(names[0])}">${GROUP307(Math.round(size * 0.52))}</span></span>`;
+        }
+        const off = Math.round(size * 0.74);
+        return `<span class="pair307" style="width:${size + off}px;height:${size}px">${face307(names[0], size)}<span style="left:${off}px">${face307(names[1], size, true)}</span></span>`;
+      }
+
+      // Names of a request ("kiran & ayesha" -> ['kiran', 'ayesha']).
+      function names307(q) {
+        const label = String((q && q.label) || 'Chat');
+        if (q && q.chat && q.chat.kind === 'group') return { list: [label], group: true, title: label };
+        const parts = label.split(' & ');
+        return { list: parts.length >= 2 ? parts.slice(0, 2) : [label], group: false, title: label };
+      }
+
+      function range307(q) { return rangeText((q && q.from) || '', (q && q.to) || ''); }
+
+      function track307() {
+        return `<div class="ut307"><div class="ut-base"></div><div class="ut-fill"></div>
+          <i class="ud" data-ud="1" style="left:33.333%"></i><i class="ud" data-ud="2" style="left:66.666%"></i>
+          <i class="ud end" data-ud="3" style="left:100%">${CHECK307(13)}</i><span class="car307">${CHAT307}</span></div>`;
+      }
+
+      // Step classes on the track stops: passed = done, the next one pulses.
+      function stops307(st) {
+        const step = { sent: 0, reached: 1, coming: 2, ready: 3, empty: 2, cancel: 0 }[st.k] || 0;
+        return [1, 2, 3].map((n) => (n <= step ? 'done' : (n === step + 1 && st.k !== 'empty' && st.k !== 'ready' && st.k !== 'cancel' ? 'next' : ''))).join(' ');
+      }
+
+      // The Uber-style live card (D2).
+      function liveCard307(q) {
+        const st = step307(q);
+        const n = names307(q);
+        const prev = scope.prev307[q.id];
+        const p0 = prev ? prev.p : st.p;
+        const pop = prev && prev.k !== 'ready' && st.k === 'ready' ? ' pop' : '';
+        return `<button type="button" class="hc307 s-${st.k}${pop}" style="--p:${p0}" data-p307="${st.p}" data-id307="${ui.esc(q.id)}" data-stops307="${stops307(st)}"
+            data-conv221-open="${ui.esc(q.id)}" aria-label="View request ${ui.esc(n.title)}">
+          <div class="hc-top"><span class="brand"><span class="bm">${CHAT307}</span>Get chat</span>${pair307(n.list, 40, n.group)}</div>
+          <div class="hc-mid"><div class="hc-l"><div class="hc-big">${st.big}</div><div class="hc-sub">${ui.esc(st.sub)}</div></div>
+            <div class="hc-r"><div class="hc-who">${ui.esc(n.title)}</div><div class="hc-rng">${ui.esc(range307(q))}</div></div></div>
+          ${track307()}
+        </button>`;
+      }
+
+      function ring307(st) {
+        const pct = { ready: 100, coming: Math.round(100 * (st.p - 66.666) / 33.333), reached: 50, sent: 8 }[st.k] || 0;
+        return `<div class="ring307 s-${st.k}" style="--p:${pct}"><span>${ui.esc(st.ring)}</span><b>${CHECK307(16)}</b></div>`;
+      }
+
+      // One request card of "In progress" (D4).
+      function requestCard307(q, i) {
+        const st = step307(q);
+        const n = names307(q);
+        const cancel = q.state === 'pending' && !num(q.parts)
+          ? `<button type="button" class="cx307" data-conv307-cancel="${ui.esc(q.id)}">Cancel</button>` : '';
+        return `<div class="rq307 in307" style="--d:${i}" data-conv221-open="${ui.esc(q.id)}" role="button" tabindex="0" aria-label="View request ${ui.esc(n.title)}">
+          ${pair307(n.list, 42, n.group)}
+          <div class="rq-x"><div class="rq-t">${ui.esc(n.title)}</div><div class="rq-w">${ui.esc(st.sub)}</div>
+            <div class="rq-s"><span class="chip307 s-${st.k}">${ui.esc(st.chip)}</span><span class="rq-r">${ui.esc(range307(q))}</span>${cancel}</div></div>
+          ${ring307(st)}
+        </div>`;
+      }
+
+      // One row of the grouped "Finished" card (D4, no "since", no path words).
+      function finishedRow307(q, i) {
+        const st = step307(q);
+        const n = names307(q);
+        const tag = st.k === 'ready' ? `<span class="mini307 g">${CHECK307(11)}Ready</span>`
+          : `<span class="mini307 m">${st.k === 'empty' ? 'No messages' : 'Cancelled'}</span>`;
+        const day = dayLabel(q.made_at);
+        const sub = [num(q.of) > 0 ? `${q.of} parts` : '', day].filter(Boolean).join(' \u00b7 ');
+        const open = st.k === 'ready' && num(q.parts) > 0 ? ` data-conv221-open="${ui.esc(q.id)}" role="button" tabindex="0"` : '';
+        return `<div class="fr307 in307${q.id === scope.viewId ? ' sel' : ''}" style="--d:${i}"${open}>${pair307(n.list, 36, n.group)}
+          <div class="fr-x"><div class="fr-t">${ui.esc(n.title)}</div><div class="fr-s">${tag}<span>${ui.esc(sub)}</span></div></div>
+          ${open ? ui.icon('i-chevron-right') : ''}</div>`;
+      }
+
+      function chatRequests307() {
+        return scope.requests.filter((q) => q.action === 'get_chat');
+      }
+
+      function match307(text) {
+        const f = String(scope.q307 || '').trim().toLowerCase();
+        return !f || String(text || '').toLowerCase().indexOf(f) >= 0;
+      }
+
+      function liveList307() {
+        // Ready first, then the ones furthest along (they finish soonest), newest first.
+        const order = { ready: 0, coming: 1, reached: 2, sent: 3 };
+        return chatRequests307().filter((q) => step307(q).live)
+          .sort((a, b) => (order[step307(a).k] ?? 4) - (order[step307(b).k] ?? 4) || String(b.made_at).localeCompare(String(a.made_at)));
+      }
+
+      // One chat row of the Chats tab (Get chat / chip / Ready on the right).
+      function chatRow307(e, i) {
+        const r = e.row;
+        const q = e.q;
+        let names; let group = false; let title; let sub;
+        if (r && r.kind === 'group') {
+          group = true; title = r.group_name || r.group_id; names = [title];
+          sub = `Group \u00b7 ${fmt.number(r.member_count || 0)} members`;
+        } else if (r) {
+          const people = r.participants || [];
+          names = people.slice(0, 2).map(shownName); title = names.join(' & ');
+          sub = `${fmt.number(r.message_count || 0)} messages \u00b7 ${lastWhen(r.last_message_at)}`;
+        } else {
+          const n = names307(q); names = n.list; group = n.group; title = n.title;
+          sub = 'not on the server list';
+        }
+        let right;
+        if (q) {
+          const st = step307(q);
+          right = st.k === 'ready'
+            ? `<button type="button" class="open307" data-conv221-open="${ui.esc(q.id)}">${CHAT307}Open</button>`
+            : `<button type="button" class="chip307 s-${st.k}" data-conv221-open="${ui.esc(q.id)}" aria-label="View request">${ui.esc(st.short)}</button>`;
+        } else {
+          right = `<button type="button" class="gc307" data-conv221-ask="${i}" title="Request from phones">${ui.icon('i-download')}Get chat</button>`;
+        }
+        let server = '';
+        if (r && num(r.on_server) > 0) {
+          const people = r.participants || [];
+          const open = r.kind === 'group'
+            ? `data-conversation-open data-kind="group" data-group="${ui.esc(r.group_id)}"`
+            : `data-conversation-open data-kind="direct" data-a="${ui.esc(people[0] ? people[0].id : '')}" data-b="${ui.esc(people[1] ? people[1].id : '')}"`;
+          server = ` \u00b7 <button class="link221" type="button" ${open}>${ui.esc(fmt.number(r.on_server))} on server</button>`;
+        }
+        return `<div class="cr307 in307" style="--d:${Math.min(i, 8)}">${pair307(names, 42, group)}
+          <div class="cr-x"><div class="cr-t">${ui.esc(title)}</div><div class="cr-s">${ui.esc(sub)}${server}</div></div>${right}</div>`;
+      }
+
+      function seg307() {
+        const chats = entries().length;
+        const active = chatRequests307().filter((q) => q.state === 'pending' && !q.empty && !(num(q.of) > 0 && num(q.parts) >= num(q.of))).length;
+        const on = scope.tab307 === 'chats' ? 0 : 1;
+        return `<div class="seg307"><button type="button" class="sg${on === 0 ? ' on' : ''}" data-conv307-tab="chats">Chats<b>${chats}</b></button>
+          <button type="button" class="sg${on === 1 ? ' on' : ''}" data-conv307-tab="requests">Requests<b>${active}</b></button><i class="sgk" style="left:${on === 0 ? '4px' : '50%'}"></i></div>`;
+      }
+
+      // Left column (D4).
+      function listCard307() {
+        let body = '';
+        if (scope.tab307 === 'chats') {
+          const all = entries();
+          scope.shown = all;
+          const rows = all.map((e, i) => ({ e, i })).filter(({ e }) => {
+            const r = e.row;
+            const text = r ? (r.kind === 'group' ? r.group_name : (r.participants || []).map(shownName).join(' ')) : (e.q && e.q.label);
+            return match307(text);
+          }).map(({ e, i }) => chatRow307(e, i));
+          body = `<div class="sec307"><span>All chats</span><span class="cnt">${rows.length}</span></div>`
+            + (rows.length ? `<div class="ig307">${rows.join('')}</div>`
+              : '<div class="empty216">No chats on the server list yet. Use New request to ask the phones of any 2 people or a group.</div>');
+        } else {
+          const list = chatRequests307().filter((q) => match307(q.label));
+          const going = list.filter((q) => { const k = step307(q).k; return k === 'sent' || k === 'reached' || k === 'coming'; });
+          const done = list.filter((q) => going.indexOf(q) < 0);
+          body = `<div class="sec307"><span>In progress</span><span class="cnt">${going.length}</span></div>`
+            + (going.length ? `<div class="stack307">${going.map(requestCard307).join('')}</div>`
+              : '<div class="empty307">No request is running. Use New request to ask the phones of any 2 people or a group.</div>')
+            + (done.length ? `<div class="sec307"><span>Finished</span><span class="cnt">${done.length}</span></div><div class="ig307">${done.slice(0, 40).map(finishedRow307).join('')}</div>` : '');
+        }
+        return `<div class="wl307">${seg307()}
+          <label class="srch307">${ui.icon('i-search')}<input type="search" placeholder="Search people or groups" value="${ui.esc(scope.q307)}" data-conv307-search aria-label="Search people or groups"></label>
+          <div class="wl-body">${body}</div></div>`;
+      }
+
+      // Top bar (D1).
+      function top307() {
+        const me = (ctx.session && ctx.session.username) || '';
+        return `<div class="wt307"><div><div class="wct">Conversations</div><div class="wcs">Chats the phones keep \u00b7 Owner only</div></div>
+          <div class="wtr"><span class="srv307 on"><i></i>Server connected</span>
+            <button type="button" class="wico307" data-conv307-theme aria-label="Light / dark">${ui.icon('i-moon')}</button>
+            <button type="button" class="wbtn307 pri" data-conv221-new>${PLUS307}New request</button>
+            ${me ? `<span class="wme307" style="background:${color307(me)}" title="${ui.esc(me)}">${ui.esc(me[0].toUpperCase())}</span>` : ''}</div></div>`;
+      }
+
+      // Live requests row (D2): up to 3 cards.
+      function liveRow307() {
+        const live = liveList307();
+        if (!live.length) return '';
+        return `<div class="wsec307"><b>Live requests</b><span class="cnt">${live.length}</span><span class="sp"></span>
+            <button type="button" class="lnk307" data-conv307-viewall>View all</button></div>
+          <div class="wlg307">${live.slice(0, 3).map(liveCard307).join('')}</div>`;
+      }
+
+      function emptyViewer307() {
+        return `<div class="wv307 none"><div class="wv-empty">${CHAT307}<b>Pick a request to read the chat</b>
+          <small>Ready requests open here. Reading is recorded in the Audit log.</small></div></div>`;
+      }
+
+      // The whole page (D1-D5): top bar, live row, two columns.
+      function page307() {
+        let right = emptyViewer307();
+        if (scope.mode === 'viewer') {
+          right = scope.view ? `<div class="wv307">${viewerPanel()}</div>`
+            : `<div class="wv307">${[0, 1, 2].map(() => '<div class="sk307 row shim"><i></i><div><u></u><u></u></div></div>').join('')}</div>`;
+        }
+        return `<div class="c307">${top307()}${liveRow307()}
+          <div class="wcols307">${listCard307()}${right}</div></div>`;
+      }
+
+      // Loading (B10 / web): one big card + 3 rows with ring places.
+      function loading307() {
+        return `<div class="c307">${top307()}<div class="sk307 hero shim"></div>
+          <div class="wcols307"><div class="wl307">${[0, 1, 2].map(() => '<div class="sk307 row shim"><i></i><div><u></u><u></u></div><b></b></div>').join('')}</div>${emptyViewer307()}</div></div>`;
+      }
+
+      // D8: only what changed moves (marker glides, numbers count up, Ready pops).
+      function animate307() {
+        const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        root.querySelectorAll('[data-p307]').forEach((card) => {
+          const id = card.getAttribute('data-id307');
+          const stops = (card.getAttribute('data-stops307') || '').split(' ');
+          card.querySelectorAll('[data-ud]').forEach((dot, j) => { if (stops[j]) dot.classList.add(stops[j]); });
+          const to = Number(card.getAttribute('data-p307')) || 0;
+          const prev = scope.prev307[id];
+          const n = card.querySelector('[data-n307]');
+          if (n && prev && prev.parts != null && !reduce) {
+            const end = Number(n.getAttribute('data-n307')) || 0;
+            let v = Math.min(prev.parts, end);
+            if (v < end) {
+              const tick = () => { v += 1; n.textContent = String(v); if (v < end && n.isConnected) setTimeout(tick, Math.max(30, 600 / (end - prev.parts))); };
+              n.textContent = String(v);
+              setTimeout(tick, 60);
+            }
+          }
+          if (reduce) card.style.setProperty('--p', to);
+          else requestAnimationFrame(() => requestAnimationFrame(() => card.style.setProperty('--p', to)));
+        });
+        const next = {};
+        chatRequests307().forEach((q) => { const st = step307(q); next[q.id] = { p: st.p, k: st.k, parts: num(q.parts) }; });
+        scope.prev307 = next;
+        if (!scope.drawn307) { scope.drawn307 = true; root.classList.add('play307'); } else root.classList.remove('play307');
+      }
+
       // ---------------------------------------------------------------- viewer
       function dayLabel(iso) {
         const d = new Date(iso);
@@ -2381,7 +2675,8 @@ LL.views = {};
 
       function bubble221(m, i) {
         const side = sideOf(m);
-        const route = ROUTE221[m.route] ? `<span class="tag221">${ROUTE221[m.route]}</span>` : '';
+        // Bundle 307 (D6): no route words on the page (ROUTE221 stays for old code).
+        const route = '';
         const cls = ['chat-bubble', side, 'b221', m.deleted_at ? 'hid221' : '', m.outside ? 'margin221' : ''].filter(Boolean).join(' ');
         const menu = scope.menu === i
           ? `<div class="menu221" role="menu">
@@ -2490,10 +2785,17 @@ LL.views = {};
         const body = messages.length
           ? thread221(messages)
           : `<div class="empty216">${num(v.parts) ? 'This part has no messages in the dates.' : 'No phone has answered yet.'}</div>`;
-        return `<div class="vhead221">
+        // Bundle 307 (D5): faces + names, "Full chat \u00b7 from X's phone \u00b7 26 parts", Ready tag, Download, Delete copy.
+        const n307 = names307(q.label ? q : { label: title, chat: v.chat });
+        const ready307 = v.complete || (num(v.of) > 0 && num(v.parts) >= num(v.of));
+        const sub307 = [rangeText(v.from || q.from, v.to || q.to), v.from_name ? `from ${v.from_name}'s phone` : '', num(v.of) ? `${v.of} parts` : ''].filter(Boolean).join(' \u00b7 ');
+        return `<div class="vhead221 wvh307">
             <button class="iconbtn221" type="button" data-conv221-back aria-label="Back">${ui.icon('i-chevron-left')}</button>
-            <div class="vt221"><b>${ui.esc(title)}</b><small>${ui.esc(sub)}</small></div>
-            ${num(v.parts) > 0 ? '<button class="btn" type="button" data-conv221-close>Close</button>' : ''}
+            ${pair307(n307.list, 40, n307.group)}
+            <div class="vt221"><b>${ui.esc(title)}</b><small title="${ui.esc(sub)}">${ui.esc(sub307 || sub)}</small></div>
+            ${ready307 ? `<span class="mini307 g big">${CHECK307(12)}Ready</span>` : ''}
+            ${messages.length ? `<button class="btn" type="button" data-conv307-download>${ui.icon('i-download')}Download</button>` : ''}
+            ${num(v.parts) > 0 ? '<button class="btn" type="button" data-conv221-close>Delete copy</button>' : ''}
             <span class="topwrap221"><button class="iconbtn221 boxed" type="button" data-conv221-top aria-label="More"><span class="kebab221 on"><i></i><i></i><i></i></span></button>${top}</span>
           </div>
           <div class="viewer221 ${scope.del ? 'has-side' : ''}">
@@ -2566,19 +2868,20 @@ LL.views = {};
       function draw() {
         revokeMedia();
         let main;
-        if (scope.loading) main = ui.skeletonPanel(4);
+        if (scope.loading && scope.mode !== 'thread') main = loading307();
+        else if (scope.loading) main = ui.skeletonPanel(4);
         else if (scope.error) main = ui.panel({ body: ui.errorState(scope.error, 'conversations') });
         else if (scope.mode === 'thread') {
           main = `<div class="vhead221"><button class="btn btn-ghost btn-sm" type="button" data-conversation-back>${ui.icon('i-chevron-left')}All conversations</button>
             <div class="vt221"><b>Server copy</b><small>Only messages not yet delivered (+7 days) are still on the server</small></div></div>${threadPanel()}`;
-        } else if (scope.mode === 'viewer') main = viewerPanel();
-        else main = listPanel();
+        } else main = page307(); // Bundle 307: list + viewer side by side
         root.innerHTML = `<div class="section conv221">
-          ${scope.mode === 'viewer' ? '' : auditNotice()}
           ${main}
+          ${scope.mode === 'thread' ? '' : auditNotice()}
           ${sheet221()}
         </div>`;
         hydrateMedia();
+        if (scope.mode !== 'thread' && !scope.loading) animate307();
       }
 
       async function loadRequests() {
@@ -2596,7 +2899,7 @@ LL.views = {};
       }
 
       async function loadViewer(quiet) {
-        if (!quiet) { scope.loading = true; scope.error = ''; draw(); }
+        if (!quiet) { scope.error = ''; draw(); } // Bundle 307: the list stays, the viewer fills in
         await loadRequests();
         scope.viewReq = scope.requests.filter((q) => q.id === scope.viewId)[0] || scope.viewReq || {};
         const result = await settle(ctx.api(`/api/v1/admin/chat-requests/${encodeURIComponent(scope.viewId)}/answer`));
@@ -2727,6 +3030,7 @@ LL.views = {};
           else if (scope.mode === 'viewer') {
             const waitingFile = scope.requests.some((q) => q.action === 'get_file' && q.parent === scope.viewId && !partsDone(q));
             if (!(scope.view && scope.view.complete) || waitingFile) await loadViewer(true);
+            else { await loadRequests(); draw(); } // Bundle 307: the live cards keep moving
           }
         },
       };
@@ -2788,6 +3092,50 @@ LL.views = {};
         draw();
       }
 
+      // Bundle 307: search keeps the focus while the list redraws.
+      root.addEventListener('input', (event) => {
+        const t = event.target;
+        if (!t.matches('[data-conv307-search]')) return;
+        scope.q307 = t.value;
+        const at = t.selectionStart;
+        draw();
+        const again = root.querySelector('[data-conv307-search]');
+        if (again) { again.focus(); try { again.setSelectionRange(at, at); } catch (_) { /* search inputs */ } }
+      });
+
+      // Bundle 307 (D5): the chat as a text file, made in the browser.
+      function download307() {
+        const v = scope.view || {};
+        const q = scope.viewReq || {};
+        const lines = (Array.isArray(v.messages) ? v.messages : []).map((m) => {
+          const who = ui.name276({ display_name: m.sender_name, username: m.sender_username });
+          const del = m.deleted_at ? ` [Deleted by user \u00b7 ${delWhen(m.deleted_at)}]` : '';
+          return `[${dayLabel(m.created_at)} ${time12(m.created_at)}] ${who}: ${m.body || ''}${del}`;
+        });
+        const blob = new Blob([`${q.label || 'Chat'} \u00b7 ${rangeText(v.from || q.from, v.to || q.to)}\n\n${lines.join('\n')}\n`], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${String(q.label || 'chat').replace(/[^A-Za-z0-9 _&-]+/g, '').trim() || 'chat'}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+      }
+
+      async function cancel307(id) {
+        const ok = ctx.confirm ? await ctx.confirm({ title: 'Cancel this request?', message: 'Phones that have not answered yet will not answer.',
+          confirmLabel: 'Cancel request', cancelLabel: 'Keep', destructive: true }) : true;
+        if (!ok) return;
+        try {
+          await ctx.api(`/api/v1/admin/actions/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+          ctx.toast('Request cancelled', 'success');
+        } catch (err) {
+          ctx.toast(err.message || 'Could not cancel', 'error');
+        }
+        loadList(true);
+      }
+
       root.addEventListener('change', (event) => {
         const t = event.target;
         const s = scope.sheet;
@@ -2816,6 +3164,17 @@ LL.views = {};
           if (hit('[data-conv221-sheetx]') || event.target.matches('[data-conv221-sheetbg]')) { scope.sheet = null; draw(); return; }
           return;
         }
+        // ---- Bundle 307
+        if ((node = hit('[data-conv307-tab]'))) { scope.tab307 = node.getAttribute('data-conv307-tab'); draw(); return; }
+        if (hit('[data-conv307-viewall]')) { scope.tab307 = 'requests'; draw(); return; }
+        if (hit('[data-conv307-theme]')) { const b = document.getElementById('theme-button'); if (b) b.click(); return; }
+        if (hit('[data-conv307-download]')) { download307(); return; }
+        if ((node = hit('[data-conv307-cancel]'))) {
+          event.stopPropagation();
+          cancel307(node.getAttribute('data-conv307-cancel'));
+          return;
+        }
+        if (hit('[data-conv307-search]')) return;
         // ---- list
         if ((node = hit('[data-conv221-tab]'))) { scope.tab = node.getAttribute('data-conv221-tab'); draw(); return; }
         if (hit('[data-conv221-new]')) { openSheet(null); return; }
@@ -2831,7 +3190,7 @@ LL.views = {};
         }
         if ((node = hit('[data-conv221-open]'))) { openViewer(node.getAttribute('data-conv221-open')); return; }
         // ---- viewer
-        if (hit('[data-conv221-back]')) { scope.mode = 'list'; scope.view = null; scope.del = null; loadList(); return; }
+        if (hit('[data-conv221-back]')) { scope.mode = 'list'; scope.view = null; scope.viewId = ''; scope.del = null; draw(); loadList(true); return; }
         if (hit('[data-conv221-close]')) {
           ctx.api(`/api/v1/admin/chat-requests/${encodeURIComponent(scope.viewId)}/close`, { method: 'POST' })
             .then(() => ctx.toast('Closed \u00b7 the copy on the server is deleted now', 'success'))

@@ -591,7 +591,11 @@ func (a *API) applyAdminActionLabel(fromDevice string, l adminActionLabel) {
 	known := map[string]bool{}
 	for _, d := range l.Devices {
 		known[d] = true
-		targets = append(targets, adminActionTarget{Device: d, User: l.UserID, Boxed: true})
+		user := l.UserID
+		if user == "" && chatActions[action] {
+			user, _ = a.deviceUser(d) // Bundle 307 (A4): chat requests name each phone's person
+		}
+		targets = append(targets, adminActionTarget{Device: d, User: user, Boxed: true})
 	}
 	label := strings.TrimSpace(l.Label)
 	if label == "" && l.UserID != "" {
@@ -608,6 +612,13 @@ func (a *API) applyAdminActionLabel(fromDevice string, l adminActionLabel) {
 	res, _ := a.store.DB().Exec(`UPDATE admin_actions SET target_label=?,targets_json=?,detail=? WHERE id=? AND targets_json='[]'`, label, string(tj), words, l.ID)
 	if res == nil || resAffected(res) == 0 {
 		return // labels come once
+	}
+	if chatActions[action] {
+		// Bundle 307 (A4): the web lists it and can fetch its parts.
+		a.rememberLabelChat307(l.ID, l.Detail)
+		// Notes that came before the label close it now.
+		a.closeIfAllEmpty307(l.ID)
+		return
 	}
 	perUser := map[string]bool{"block": true, "unblock": true, "off": true, "active": true, "admin_badge": true, "wifi_rule": true}
 	if !perUser[action] || l.UserID == "" {
@@ -791,6 +802,9 @@ type adminActionsSyncIn struct {
 	SigningKey string             `json:"signing_key"`
 	Labels     []adminActionLabel `json:"labels"`
 	Build      int64              `json:"build"`
+	// Bundle 307 (A1 / A5): signed "seen" notes + final states of offline requests.
+	Seen   []signedBlob     `json:"seen,omitempty"`
+	Closed []adminClosed307 `json:"closed,omitempty"`
 }
 
 func (a *API) takeAdminActionsIn(deviceID string, in *adminActionsSyncIn) (int, int, []string) {
@@ -828,6 +842,19 @@ func (a *API) takeAdminActionsIn(deviceID string, in *adminActionsSyncIn) (int, 
 	}
 	for _, rc := range in.Receipts {
 		a.applyAdminActionReceipt(rc, deviceID)
+	}
+	// Bundle 307 (A1 / A2 / A5).
+	if len(in.Seen) > maxSeenPerSync307 {
+		in.Seen = in.Seen[:maxSeenPerSync307]
+	}
+	for _, n := range in.Seen {
+		a.applySeenNote307(n, deviceID)
+	}
+	if len(in.Closed) > maxClosedPerSync307 {
+		in.Closed = in.Closed[:maxClosedPerSync307]
+	}
+	for _, c := range in.Closed {
+		a.applyClosed307(deviceID, c)
 	}
 	return applied, rejected, capped
 }

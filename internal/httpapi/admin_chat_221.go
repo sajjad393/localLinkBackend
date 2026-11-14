@@ -919,6 +919,11 @@ type chatRequestRow struct {
 	FileID   string   `json:"file_id,omitempty"`
 	From     string   `json:"from"`
 	To       string   `json:"to"`
+	// Bundle 307 (A2): every phone said it has no copy ("No messages").
+	Empty bool `json:"empty,omitempty"`
+	// Bundle 307 (live card): phones asked / phones that answered anything.
+	Phones  int `json:"phones"`
+	Reached int `json:"reached"`
 }
 
 // AdminChatRequestList: GET /api/v1/admin/chat-requests
@@ -950,6 +955,7 @@ func (a *API) AdminChatRequestList(w http.ResponseWriter, r *http.Request) {
 	for _, x := range list {
 		row := x.row
 		row.Chat, row.From, row.To = a.chatOf(row.ID)
+		row.Empty = row.State == "cancelled" && a.chatEmpty307(row.ID)
 		_ = a.store.DB().QueryRow(`SELECT file_id FROM admin_chat_request_meta WHERE action_id=?`, row.ID).Scan(&row.FileID)
 		if answerID, device, of := a.bestAnswer(row.ID); answerID != "" {
 			row.Of = of
@@ -961,6 +967,8 @@ func (a *API) AdminChatRequestList(w http.ResponseWriter, r *http.Request) {
 		}
 		targets := []adminActionTarget{}
 		_ = json.Unmarshal([]byte(x.tj), &targets)
+		row.Phones = len(targets)
+		row.Reached = a.reachedPhones307(row.ID, targets)
 		if row.State == "pending" {
 			for _, t := range targets {
 				var build int64
