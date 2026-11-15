@@ -2020,9 +2020,18 @@ LL.views = {};
     if (q && q.state === 'cancelled') {
       return { k: 'cancel', p: 0, big: '<b class="m">Cancelled</b>', sub: 'Request cancelled', chip: 'Cancelled', ring: '', short: '', live: false };
     }
-    if ((of > 0 && parts >= of) || (q && q.state === 'done')) {
+    // Bundle 317 (A): Ready only when every part is here; 'done' = the phone
+    // answered (first receipt) - the chat itself is still on the way.
+    const carried = q && (q.action === 'get_chat' || q.action === 'get_file');
+    if ((of > 0 && parts >= of) || (q && q.state === 'done' && (!carried || q.closed))) {
       return { k: 'ready', p: 100, big: '<b class="g">Ready</b> to read', sub: of > 0 ? `Tap to open \u00b7 ${of} parts` : 'Opens on the admin phone',
         chip: 'Ready', ring: '', short: 'Ready', live: !(q && (q.closed || q.opened)) && of > 0 };
+    }
+    if (q && q.state === 'done' && !(parts > 0 && of > 0)) {
+      const who = from ? `${from}'s phone` : 'The phone';
+      return { k: 'coming', p: 66.666, big: `<b>${who.replace(/[&<>"]/g, (c) => '&#' + c.charCodeAt(0) + ';')}</b> answered`,
+        sub: q.action === 'get_file' ? 'The file is on the way' : 'The chat is on the way', chip: 'Answered',
+        ring: '0%', short: '0%', live: true };
     }
     if (parts > 0 && of > 0) {
       return { k: 'coming', p: 66.666 + 33.333 * parts / of, big: `<b><span data-n307="${parts}">${parts}</span> of ${of}</b> parts`,
@@ -2043,6 +2052,53 @@ LL.views = {};
     return { k: 'sent', p: 4, big: `<b>Sent</b> to ${phones} phone${phones === 1 ? '' : 's'}`,
       sub: num(q && q.old_app) > 0 ? 'Old LinkUp on a phone \u00b7 it must update to answer' : 'Waiting for their phones',
       chip: 'Sent', ring: '\u2026', short: 'Sent', live: true };
+  }
+
+  // Bundle 317 (B): a group event body (`llev:v1:{json}`) -> the system
+  // lines the app shows ("kiran created group \"Friends\"", "kiran added
+  // ayesha"). Same words as the app (GroupEvent.lines, English). null = not
+  // an event. nameOf(id) gives a name from this copy; then the event's names.
+  function sysLines317(body, nameOf) {
+    const text = String(body || '');
+    if (text.indexOf('llev:v1:') !== 0) return null;
+    let e;
+    try { e = JSON.parse(text.slice(8)); } catch (_) { return null; }
+    if (!e || typeof e !== 'object' || Array.isArray(e)) return null;
+    const nm = e.nm && typeof e.nm === 'object' ? e.nm : {};
+    const who = (id) => {
+      const local = String((nameOf && nameOf(id)) || '').trim();
+      if (local && local !== 'Group member') return local;
+      return String(nm[id] || '').trim() || 'Someone';
+    };
+    const t = Array.isArray(e.t) ? e.t.map(String) : [];
+    const list = (ids) => {
+      const parts = ids.map(who);
+      if (parts.length < 2) return parts.join('');
+      return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+    };
+    const actor = who(String(e.by || ''));
+    const name = String(e.n || '');
+    const admins = String(e.v || '') === 'admins';
+    switch (String(e.k || '')) {
+      case 'create': return [`${actor} created group "${name}"`];
+      case 'add': return [`${actor} added ${list(t)}`];
+      case 'remove': return [`${actor} removed ${list(t)}`];
+      case 'link_join': return [`${actor} joined using this group's invite link`];
+      case 'leave': return e.o ? [`${actor} left`, `${who(String(e.o))} is now the group owner`] : [`${actor} left`];
+      case 'admin': return [`${actor} made ${list(t)} a group admin`];
+      case 'unadmin': return [`${actor} dismissed ${list(t)} as group admin`];
+      case 'name': return [`${actor} changed the group name to "${name}"`];
+      case 'desc': return [`${actor} changed the group description`];
+      case 'photo': return [`${actor} changed this group's photo`];
+      case 'photo_removed': return [`${actor} deleted this group's photo`];
+      case 'pin': return [`${actor} pinned a message`];
+      case 'set':
+        if (e.f === 'send_messages') return [`${actor} changed this group so ${admins ? 'only admins' : 'all members'} can send messages`];
+        if (e.f === 'edit_info') return [`${actor} changed this group so ${admins ? 'only admins' : 'all members'} can edit the group info`];
+        if (e.f === 'add_members') return [`${actor} changed this group so ${admins ? 'only admins' : 'all members'} can add members`];
+        return [`${actor} changed the group settings`];
+      default: return [`${actor} changed the group`];
+    }
   }
 
   // Bundle 307: the avatar colour of the app (h*31+u, 8 colours).
@@ -2541,7 +2597,7 @@ LL.views = {};
           <div class="hc-top"><span class="brand"><span class="bm">${CHAT307}</span>Get chat</span>${pair307(n.list, 40, n.group)}</div>
           <div class="hc-mid"><div class="hc-l"><div class="hc-big">${st.big}</div><div class="hc-sub">${ui.esc(st.sub)}</div></div>
             <div class="hc-r"><div class="hc-who">${ui.esc(n.title)}</div><div class="hc-rng">${ui.esc(range307(q))}</div></div></div>
-          ${track307(st)}${phones310(q, st, true)}
+          ${track307(st)}${phones310(q, st, true)}${filesStrip317(q, st)}
         </button>`;
       }
 
@@ -2572,7 +2628,7 @@ LL.views = {};
           <div class="hc-top"><span class="brand"><span class="bm">${CHAT307}</span>Get chat</span><span class="sp"></span>
             <div class="hc-r"><div class="hc-who">${ui.esc(n.title)}</div><div class="hc-rng">${ui.esc(range307(q))}</div></div>${pair307(n.list, 40, n.group)}</div>
           <div class="hw310"><div class="hc-l"><div class="hc-big">${st.big}</div><div class="hc-sub">${ui.esc(st.sub)}</div></div>
-            <div class="hw-t">${track307(st)}</div></div>${phones310(q, st, false)}
+            <div class="hw-t">${track307(st)}</div></div>${phones310(q, st, false)}${filesStrip317(q, st)}
         </button>`;
       }
 
@@ -2599,7 +2655,10 @@ LL.views = {};
       function finishedRow307(q, i) {
         const st = step307(q);
         const n = names307(q);
-        const tag = st.k === 'ready' ? `<span class="mini307 g">${CHECK307(11)}Ready</span>`
+        const f317 = st.k === 'ready' ? files317(q) : null;
+        const files = f317 && f317.wanted
+          ? (f317.active ? `<span class="mini307 b">Files ${f317.here}/${f317.wanted}</span>` : `<span class="mini307 g">Files \u2713</span>`) : '';
+        const tag = st.k === 'ready' ? `<span class="mini307 g">${CHECK307(11)}Ready</span>${files}`
           : `<span class="mini307 m">${st.k === 'empty' ? 'No messages' : 'Cancelled'}</span>`;
         const day = dayLabel(q.made_at);
         const sub = [num(q.of) > 0 ? `${q.of} parts` : '', day].filter(Boolean).join(' \u00b7 ');
@@ -2621,7 +2680,7 @@ LL.views = {};
       function liveList307() {
         // Ready first, then the ones furthest along (they finish soonest), newest first.
         const order = { ready: 0, coming: 1, reached: 2, sent: 3 };
-        return chatRequests307().filter((q) => step307(q).live)
+        return chatRequests307().filter((q) => step307(q).live || (step307(q).k === 'ready' && (files317(q) || {}).active))
           .sort((a, b) => (order[step307(a).k] ?? 4) - (order[step307(b).k] ?? 4) || String(b.made_at).localeCompare(String(a.made_at)));
       }
 
@@ -2811,6 +2870,17 @@ LL.views = {};
         return `${dayLabel(from + 'T12:00:00')} - ${dayLabel(to + 'T12:00:00')}`;
       }
 
+      // Bundle 317 (C): "Deleted 11:41" (+ the date when deleted on another
+      // day than it was sent - same rule as the app).
+      const TRASH317 = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 1h4v2H4V4h4l1-1zm-3 5h12l-1 12a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 8z"/></svg>';
+      function delAt317(iso, sentIso) {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return '';
+        const hm = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+        const sent = new Date(sentIso);
+        return !Number.isNaN(sent.getTime()) && d.toDateString() === sent.toDateString() ? hm : `${dayLabel(iso)} ${hm}`;
+      }
+
       function delWhen(iso) {
         const d = new Date(iso);
         if (Number.isNaN(d.getTime())) return '';
@@ -2828,6 +2898,74 @@ LL.views = {};
 
       function fileRequest(fileId) {
         return scope.requests.filter((q) => q.action === 'get_file' && q.file_id === fileId && q.state !== 'cancelled' && !q.closed)[0] || null;
+      }
+
+      // Bundle 317 (G6): the same file states as the app viewer. The Owner's
+      // phone asks for every file by itself (no Get button here): Next in
+      // line / Coming x / y / here / Not on X's phone any more / Too big.
+      const MAX_FILE317 = 50 * 1024 * 1024;
+      function fromPhone317() {
+        const q = scope.viewReq || {};
+        const v = scope.view || {};
+        return String(q.from_name || v.from_name || '');
+      }
+      function fileState317(a) {
+        if (a.file_gone) return { k: 'gone60' };
+        if (num(a.size) > MAX_FILE317) return { k: 'big' };
+        const rows = scope.requests.filter((q) => q.action === 'get_file' && q.file_id === a.file_id);
+        const here = rows.filter(partsDone)[0];
+        if (here) return { k: 'here', f: here };
+        const r = rows[0];
+        if (r) {
+          if (r.refused === 'file_too_big') return { k: 'big' };
+          if (r.refused || r.empty) return { k: 'gone' };
+          if (r.state === 'cancelled' || r.closed) return { k: 'stopped' };
+          return { k: 'coming', f: r };
+        }
+        return { k: 'next' };
+      }
+      function fileWords317(st) {
+        const from = fromPhone317();
+        switch (st.k) {
+          case 'big': return 'Too big to bring (over 50 MB)';
+          case 'gone': return from ? `Not on ${from}'s phone any more` : 'Not on the phone any more';
+          case 'gone60': return 'File removed after 60 days';
+          case 'stopped': return 'Files stopped';
+          case 'coming': return num(st.f.of) > 0 && num(st.f.parts) > 0 ? `Coming ${st.f.parts} / ${st.f.of}` : (from ? `Coming from ${from}'s phone` : 'Coming');
+          case 'next': return from ? `Next in line \u00b7 from ${from}'s phone` : 'Next in line';
+          default: return '';
+        }
+      }
+
+      // Bundle 317 (G8): the files of a Get chat request (its get_file rows).
+      function files317(q) {
+        const kids = scope.requests.filter((x) => x.action === 'get_file' && x.parent === q.id);
+        if (!kids.length) return null;
+        const seen = {};
+        let here = 0; let gone = 0; let coming = 0; let stopped = 0; let bytes = 0; let total = 0;
+        kids.forEach((x) => {
+          const key = x.file_id || x.id;
+          if (seen[key]) return;
+          seen[key] = 1;
+          if (partsDone(x)) here++;
+          else if (x.refused || x.empty) gone++;
+          else if (x.state === 'cancelled' || x.closed) stopped++;
+          else { coming++; total += num(x.of); bytes += num(x.parts); }
+        });
+        return { here, gone, coming, stopped, wanted: here + coming, parts: bytes, of: total, active: coming > 0 && !q.closed };
+      }
+      function filesStrip317(q, st) {
+        const f = st.k === 'ready' ? files317(q) : null;
+        if (!f || !f.wanted) return '';
+        const done = !f.active;
+        const from = String(q.from_name || '');
+        const head = done ? `<b><span class="g">${f.here} file${f.here === 1 ? '' : 's'}</span> here</b>` : `<b><span>${f.here} of ${f.wanted}</span> files</b>`;
+        const sub = done ? 'All files here' : [f.of > 0 ? `${f.parts} of ${f.of} parts` : '', from ? `from ${from}'s phone` : ''].filter(Boolean).join(' \u00b7 ');
+        const pct = done ? 100 : Math.round(100 * f.here / Math.max(1, f.wanted));
+        return `<div class="fs317${done ? ' done' : ''}" data-files317="${ui.esc(q.id)}"><div class="fs317r">${done ? CHECK307(16) : ui.icon('i-image')}
+          <div class="fs317t">${head}<span>${ui.esc(sub)}</span></div><span class="mini307 ${done ? 'g' : 'b'}">${done ? 'All here' : 'Coming'}</span></div>
+          <span class="fs317bar"><i style="width:${pct}%"></i></span>
+          ${f.gone ? `<div class="fs317g">${f.gone} not on ${from ? ui.esc(from) + "'s" : 'the'} phone any more</div>` : ''}</div>`;
       }
 
       // Bundle 310 (V2): a voice note like the app's voice row - round button,
@@ -2865,10 +3003,13 @@ LL.views = {};
           const off = (113.1 * (1 - Math.max(0.08, pct / 100))).toFixed(1);
           const stop = !num(f.parts) && f.state === 'pending'
             ? `<button type="button" class="vx310" data-conv307-cancel="${ui.esc(f.id)}" aria-label="Stop getting the voice note">${ui.icon('i-close')}</button>` : '';
-          btn = `<span class="vbtn310 ring${pct ? '' : ' spin'}" title="${num(f.parts) ? `${f.parts} of ${f.of} parts` : 'Asked the phones \u00b7 waiting'}"><svg viewBox="0 0 42 42" width="42" height="42"><circle cx="21" cy="21" r="18" class="rb"/><circle cx="21" cy="21" r="18" class="rf" stroke-dasharray="113.1" stroke-dashoffset="${off}"/></svg>${stop}</span>`;
-          label = num(f.parts) ? `${f.parts} of ${f.of} parts` : `Getting \u00b7 ${label || 'voice note'}`;
+          btn = `<span class="vbtn310 ring${pct ? '' : ' spin'}" title="${num(f.parts) ? `Coming ${f.parts} / ${f.of}` : 'Coming'}"><svg viewBox="0 0 42 42" width="42" height="42"><circle cx="21" cy="21" r="18" class="rb"/><circle cx="21" cy="21" r="18" class="rf" stroke-dasharray="113.1" stroke-dashoffset="${off}"/></svg>${stop}</span>`;
+          label = num(f.parts) ? `Coming ${f.parts} / ${f.of}` : fileWords317({ k: 'coming', f });
         } else if (a.file_id) {
-          btn = `<button type="button" class="vbtn310" data-conv221-file="${ui.esc(a.file_id)}" data-mid="${ui.esc(m.id || '')}" data-name="${ui.esc(a.name || '')}" aria-label="Get the voice note from the phone" title="Get it from the phone">${DL310(24)}</button>`;
+          // Bundle 317 (G6): no Get button - the Owner's phone brings it by itself.
+          const st317 = fileState317(a);
+          btn = `<span class="vbtn310 off">${st317.k === 'next' ? DL310(24) : PLAY310}</span>`;
+          label = fileWords317(st317) || label;
         } else {
           btn = `<span class="vbtn310 off">${PLAY310}</span>`;
         }
@@ -2940,32 +3081,39 @@ LL.views = {};
         if (isVoice310(a)) return voice310(a, m);
         const type = String(a.type || '');
         const isImage = /^image\//.test(type);
-        const word = isImage ? 'photo' : (/^video\//.test(type) ? 'video' : 'file');
+        const isVideo = /^video\//.test(type);
+        const word = isImage ? 'photo' : (isVideo ? 'video' : 'file');
         const name = a.name || word;
         const size = num(a.size) > 0 ? fmt.bytes(a.size) : '';
         const hasThumb = !!(a.thumb && /^[A-Za-z0-9+/=_-]+$/.test(a.thumb));
-        const f = a.file_id ? fileRequest(a.file_id) : null;
-        const wait = f && !partsDone(f) ? (num(f.parts) ? `${f.parts} of ${f.of} parts` : 'Asked the phones \u00b7 waiting') : '';
+        // Bundle 317 (G6): file states, no Get button (the Owner phone asks).
+        const st317 = a.file_id ? fileState317(a) : { k: 'none' };
+        const f = st317.f || null;
+        const wait = st317.k === 'here' || st317.k === 'none' ? '' : fileWords317(st317);
         if (hasThumb) {
           // Photo / video picture: the action sits on the picture like the app.
           const img = `<img class="th221" alt="${ui.esc(name)}" src="data:${a.thumb_type === 'image/png' ? 'image/png' : 'image/jpeg'};base64,${a.thumb}">`;
           let pill = '';
           if (a.file_gone) pill = '';
-          else if (partsDone(f)) pill = `<button class="phg310" type="button" data-conv221-show="${ui.esc(f.id)}" data-image="${isImage ? '1' : ''}" data-name="${ui.esc(name)}">${isImage ? ui.icon('i-image') : DL310(18)}<b>Show full ${word}</b></button>`;
-          else if (f) pill = `<span class="phg310 wait"><b>${ui.esc(wait)}</b></span>`;
-          else if (a.file_id) pill = `<button class="phg310" type="button" data-conv221-file="${ui.esc(a.file_id)}" data-mid="${ui.esc(m.id || '')}" data-name="${ui.esc(a.name || '')}">${DL310(18)}<b>Get full ${word}${size ? ` \u00b7 ${ui.esc(size)}` : ''}</b></button>`;
+          else if (partsDone(f)) pill = `<button class="phg310" type="button" data-conv221-show="${ui.esc(f.id)}" data-image="${isImage ? '1' : ''}" data-name="${ui.esc(name)}">${isImage ? ui.icon('i-image') : (isVideo ? PLAY310 : DL310(18))}<b>Show full ${word}${size ? ` \u00b7 ${ui.esc(size)}` : ''}</b></button>`;
+          else if (wait) pill = `<span class="phg310 wait${st317.k === 'gone' || st317.k === 'big' || st317.k === 'stopped' ? ' off317' : ''}"><b>${ui.esc(wait)}</b></span>`;
           return `<div class="att221 ph310">${img}${pill}${onPhoto ? `<span class="pht310">${onPhoto}</span>` : ''}</div>`
             + (a.file_gone ? '<span class="gone221">File removed after 60 days \u00b7 thumbnail only</span>' : '');
         }
         // A file (or a picture without a thumbnail): icon, short name, size, action.
         const ext = (/\.([A-Za-z0-9]{1,5})$/.exec(name) || [])[1] || '';
-        const meta = a.file_gone ? 'File removed after 60 days' : (wait || [size, ext ? ext.toUpperCase() : (isImage ? 'Photo' : '')].filter(Boolean).join(' \u00b7 '));
+        // Bundle 317 (D): "Video · 2.0 MB" / "Photo · 1.2 MB" / "PDF · 300 KB".
+        const kind = isVideo ? 'Video' : (isImage ? 'Photo' : (ext ? ext.toUpperCase() : 'File'));
+        const meta = a.file_gone ? 'File removed after 60 days' : (wait || [kind, size].filter(Boolean).join(' \u00b7 '));
         let action = '';
         if (a.file_gone) action = '';
         else if (partsDone(f)) action = `<button class="fd310 ready" type="button" data-conv221-show="${ui.esc(f.id)}" data-image="${isImage ? '1' : ''}" data-name="${ui.esc(name)}" title="Show full ${word}" aria-label="Show full ${word}">${DL310(20)}</button>`;
-        else if (f) action = `<span class="fd310 ring spin" title="${ui.esc(wait)}"><svg viewBox="0 0 42 42" width="34" height="34"><circle cx="21" cy="21" r="18" class="rb"/><circle cx="21" cy="21" r="18" class="rf" stroke-dasharray="113.1" stroke-dashoffset="80"/></svg></span>`;
-        else if (a.file_id) action = `<button class="fd310" type="button" data-conv221-file="${ui.esc(a.file_id)}" data-mid="${ui.esc(m.id || '')}" data-name="${ui.esc(a.name || '')}" title="Get full ${word}" aria-label="Get full ${word}">${DL310(20)}</button>`;
-        return `<div class="att221 fr310"><span class="fi310">${isImage ? ui.icon('i-image') : FILE310}</span>
+        else if (st317.k === 'coming') {
+          const pct = f && num(f.of) > 0 ? Math.min(100, Math.round(100 * num(f.parts) / num(f.of))) : 0;
+          const off = (113.1 * (1 - Math.max(0.08, pct / 100))).toFixed(1);
+          action = `<span class="fd310 ring${pct ? '' : ' spin'}" title="${ui.esc(wait)}"><svg viewBox="0 0 42 42" width="34" height="34"><circle cx="21" cy="21" r="18" class="rb"/><circle cx="21" cy="21" r="18" class="rf" stroke-dasharray="113.1" stroke-dashoffset="${off}"/></svg></span>`;
+        }
+        return `<div class="att221 fr310${st317.k === 'gone' || st317.k === 'big' ? ' off317' : ''}"><span class="fi310">${isImage ? ui.icon('i-image') : (isVideo ? PLAY310 : FILE310)}</span>
           <div class="fx310"><div class="fn310" title="${ui.esc(name)}">${ui.esc(shortName310(name, 22))}</div><div class="fm310">${ui.esc(meta)}</div></div>${action}</div>`;
       }
 
@@ -2980,7 +3128,14 @@ LL.views = {};
         const group = !!(v.chat && v.chat.kind === 'group');
         const name = ui.name276({ display_name: m.sender_name, username: m.sender_username });
         const showName = group && first !== false && side === 'in';
-        const atts = Array.isArray(m.attachments) ? m.attachments : [];
+        // Bundle 317 (D): one row per file id (the phone may list a file twice).
+        const seen317 = {};
+        const atts = (Array.isArray(m.attachments) ? m.attachments : []).filter((a) => {
+          const key = a && a.file_id ? 'id:' + a.file_id : `nt:${a && a.name}|${a && a.size}|${a && a.type}`;
+          if (seen317[key]) return false;
+          seen317[key] = 1;
+          return true;
+        });
         const time = `<span class="ft310">${ui.esc(time12(m.created_at))}</span>`;
         const a0 = atts[0] || {};
         const photoOnly = !m.body && !m.deleted_at && atts.length === 1 && !isVoice310(a0) && !!(a0.thumb && /^[A-Za-z0-9+/=_-]+$/.test(a0.thumb));
@@ -2995,7 +3150,7 @@ LL.views = {};
             ${showName ? `<div class="bn310" style="color:${color307(name)}">${ui.esc(name)}</div>` : ''}
             ${m.body ? `<div class="chat-body">${ui.esc(m.body)}${time}</div>` : ''}
             ${atts.map((a) => att221(a, m, photoOnly ? time : '')).join('')}
-            ${m.deleted_at ? `<span class="del221">Deleted by user \u00b7 ${ui.esc(delWhen(m.deleted_at))}</span>` : ''}
+            ${m.deleted_at ? `<span class="del317" title="Deleted by user">${TRASH317}Deleted ${ui.esc(delAt317(m.deleted_at, m.created_at))}</span>` : ''}
             ${!m.body && !photoOnly ? `<div class="ftb310">${time}</div>` : ''}
             ${menu}
           </div></div>`;
@@ -3004,14 +3159,19 @@ LL.views = {};
       function thread221(messages) {
         let lastDay = '';
         let inMargin = false;
+        const names = {};
+        messages.forEach((x) => { if (x.sender && String(x.sender_name || '').trim()) names[x.sender] = String(x.sender_name).trim(); });
         return `<div class="chat-thread t221wrap">${messages.map((m, i) => {
           let head = '';
           const day = dayLabel(m.created_at);
           if (day && day !== lastDay) { head += `<div class="day221"><span>${ui.esc(day)}</span></div>`; lastDay = day; }
           if (m.outside && !inMargin) head += '<div class="chip221">Outside the dates (phone clock)</div>';
           inMargin = !!m.outside;
+          // Bundle 317 (B): a group event is a centred system line, never code.
+          const sys = sysLines317(m.body, (id) => names[id]);
+          if (sys) return head + `<div class="sys317" data-sys317="${ui.esc(m.id || i)}">${sys.map((l) => `<span>${ui.esc(l)}</span>`).join('')}</div>`;
           const prev = messages[i - 1];
-          const first = !prev || !!head || (prev.sender || prev.sender_name) !== (m.sender || m.sender_name);
+          const first = !prev || !!head || !!sysLines317(prev.body) || (prev.sender || prev.sender_name) !== (m.sender || m.sender_name);
           return head + bubble221(m, i, first);
         }).join('')}</div>`;
       }

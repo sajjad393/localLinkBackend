@@ -1883,3 +1883,27 @@ button.chip307 { cursor: pointer; }
 .fd310 { width: 34px; height: 34px; border-radius: 50%; border: 1.5px solid color-mix(in srgb, var(--a-onv) 40%, transparent); background: none; color: var(--a-onv); display: grid; place-items: center; flex: none; position: relative; padding: 0; cursor: pointer; }
 .fd310.ready { border: 0; background: var(--a-pri); color: #fff; }
 .fd310.ring { border: 0; cursor: default; }
+
+/* Bundle 317 (B): group system lines (same as the app: grey chip, centred). */
+.sys317 { display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 6px 0; }
+.sys317 span { max-width: 88%; padding: 4px 11px; border-radius: 11px; background: var(--a-chip, var(--surface-muted)); color: var(--a-onv, var(--text-secondary)); font-size: 12px; line-height: 1.35; text-align: center; }
+/* Bundle 317 (C): lighter deleted look - faded bubble + small red line. */
+.b221.hid221, .wv307 .b221.hid221 { opacity: .55; }
+.del317 { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; font-size: 12px; font-weight: 600; color: #d92d20; }
+[data-theme="dark"] .del317 { color: #f97066; }
+/* Bundle 317 (D / G6): files that will not come look off. */
+.att221.off317 { opacity: .6; }
+.phg310.wait.off317 { background: rgba(0, 0, 0, .55); }
+/* Bundle 317 (G8): the files strip under a Ready card + the Files chip. */
+.mini307.b { background: var(--k-blueS); color: var(--k-blueT); }
+.fs317 { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--k-line, var(--k-track)); display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.fs317r { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fs317r > svg { width: 18px; height: 18px; flex: none; color: var(--k-blueT); fill: currentColor; }
+.fs317.done .fs317r > svg { color: var(--k-ok); }
+.fs317t { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.fs317t b { font-size: 14px; } .fs317t b span { color: var(--k-blueT); } .fs317t b span.g { color: var(--k-green); }
+.fs317t > span { font-size: 12px; color: var(--k-grey); }
+.fs317bar { display: block; height: 4px; border-radius: 2px; background: var(--k-track); overflow: hidden; }
+.fs317bar i { display: block; height: 100%; background: var(--k-blueT); transition: width .4s; }
+.fs317.done .fs317bar i { background: var(--k-ok); }
+.fs317g { font-size: 12px; color: var(--k-grey); }

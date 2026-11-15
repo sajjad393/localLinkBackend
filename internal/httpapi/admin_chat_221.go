@@ -947,6 +947,8 @@ type chatRequestRow struct {
 	// every phone is too old to say "no copy" and 30 min went by.
 	Who   []chatPhone310 `json:"who,omitempty"`
 	Stuck string         `json:"stuck,omitempty"`
+	// Bundle 317 (G5): why the phone said no ("file_gone"), from its receipt.
+	Refused string `json:"refused,omitempty"`
 }
 
 // AdminChatRequestList: GET /api/v1/admin/chat-requests
@@ -992,6 +994,7 @@ func (a *API) AdminChatRequestList(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(x.tj), &targets)
 		row.Phones = len(targets)
 		row.Reached = a.reachedPhones307(row.ID, targets)
+		row.Refused = a.refused317(row.ID)
 		if row.State == "pending" {
 			for _, t := range targets {
 				var build int64
