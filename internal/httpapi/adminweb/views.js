@@ -2033,6 +2033,13 @@ LL.views = {};
       return { k: 'reached', p: 33.333, big: `<b>${reached} of ${phones}</b> phones`, sub: 'Looking for the chat', chip: `${reached} of ${phones} phones`,
         ring: `${reached}/${phones}`, short: `${reached}/${phones}`, live: true };
     }
+    // Bundle 310 (P4): every phone is on an app older than 3.0.101 and 30 min
+    // passed -> say so (the request stays open, no auto-cancel).
+    if (q && q.stuck === 'old_app') {
+      const n = Array.isArray(q.who) && q.who.length ? q.who.length : phones;
+      return { k: 'old', p: 4, big: `<b>Old app</b> on ${n} phone${n === 1 ? '' : 's'}`, sub: 'Update LinkUp on these phones \u00b7 still open',
+        chip: 'Old app', ring: '!', short: 'Old app', live: true };
+    }
     return { k: 'sent', p: 4, big: `<b>Sent</b> to ${phones} phone${phones === 1 ? '' : 's'}`,
       sub: num(q && q.old_app) > 0 ? 'Old LinkUp on a phone \u00b7 it must update to answer' : 'Waiting for their phones',
       chip: 'Sent', ring: '\u2026', short: 'Sent', live: true };
@@ -2045,6 +2052,97 @@ LL.views = {};
     const s = String(name || '');
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0x7fffffff;
     return PAL307[h % 8];
+  }
+
+  // Bundle 310 (P3): why one phone of a live request has not answered yet.
+  // From the server row "who": parts | empty | no_trust | looking | old | got | wait.
+  function hm310(iso, now) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    let h = d.getHours();
+    const ap = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    const t = `${h}:${String(d.getMinutes()).padStart(2, '0')} ${ap}`;
+    const n = now || new Date();
+    const same = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+    return same ? t : `${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}, ${t}`;
+  }
+
+  function why310(p, now) {
+    const w = String((p && p.why) || 'wait');
+    if (w === 'parts') return { k: 'look', text: 'Sending parts' };
+    if (w === 'empty') return { k: 'none', text: 'No copy' };
+    if (w === 'no_trust') return { k: 'wait', text: 'Can\u2019t check the request yet' };
+    if (w === 'looking') return { k: 'look', text: 'Looking for the chat' };
+    if (w === 'old') return { k: 'old', text: `Old app${p.version ? ' ' + p.version : ''} \u00b7 update to answer` };
+    if (w === 'got') return { k: 'look', text: 'Got the request' };
+    const at = p && p.checkin ? hm310(p.checkin, now) : '';
+    return { k: 'wait', text: at ? `Not checked in since ${at}` : 'Not checked in yet' };
+  }
+
+  // Bundle 310 (V2): a voice note in an answer (audio/*, voice_*.m4a or another sound file).
+  function isVoice310(a) {
+    const type = String((a && a.type) || '').toLowerCase();
+    const name = String((a && a.name) || '').toLowerCase();
+    // Same rule as the app's voice row (attachment_tile.dart _isAudio).
+    return /^audio\//.test(type) || /\.(m4a|aac|ogg|opus|mp3|wav)$/.test(name);
+  }
+
+  // 0:07 / 1:05 (the app's voice length).
+  function len310(ms) {
+    const s = Math.max(0, Math.round(num(ms) / 1000));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  // The app's VoiceWave: bars 2.5 px every 3.5 px, at least 3 px high, 22 px
+  // tall, round ends; the played part and the dot in the primary colour.
+  // levels: the phone's digits "0369..." (0-9), or numbers 0..1 / 0..100;
+  // none = flat (old phone).
+  function bars310(levels, width, played, flat) {
+    const w = Math.max(40, Math.round(num(width) || 150));
+    const h = 22;
+    const n = Math.max(1, Math.floor((w + 1) / 3.5));
+    const digits = typeof levels === 'string';
+    const src = digits ? levels.replace(/[^0-9]/g, '').split('').slice(0, 400).map(Number)
+      : (Array.isArray(levels) ? levels.map((x) => Math.max(0, Number(x) || 0)) : []);
+    const top = src.reduce((m, x) => Math.max(m, x), 0);
+    const scale = digits ? 9 : (top > 1 ? 100 : 1);
+    const lv = [];
+    for (let i = 0; i < n; i++) {
+      if (flat || !src.length) { lv.push(0); continue; }
+      const a = Math.floor(i * src.length / n);
+      const b = Math.max(a + 1, Math.floor((i + 1) * src.length / n));
+      let peak = 0;
+      for (let j = a; j < b && j < src.length; j++) peak = Math.max(peak, src[j]);
+      lv.push(Math.min(1, peak / scale));
+    }
+    const pl = Math.max(0, Math.min(1, Number(played) || 0));
+    const pn = Math.floor(pl * n);
+    let out = '';
+    lv.forEach((l, i) => {
+      const bh = 3 + (h - 3) * l;
+      out += `<rect x="${(i * 3.5).toFixed(1)}" y="${((h - bh) / 2).toFixed(2)}" width="2.5" height="${bh.toFixed(2)}" rx="1.25" class="${i < pn ? 'wp' : 'wb'}"/>`;
+    });
+    if (!flat && src.length) {
+      const span = (n - 1) * 3.5 + 2.5;
+      const x = Math.min(Math.max(pl * span, 6), w - 6);
+      out += `<circle cx="${x.toFixed(1)}" cy="${h / 2}" r="6" class="wd"/>`;
+    }
+    return `<svg class="wave310" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">${out}</svg>`;
+  }
+
+  // Bundle 310 (V3): long file names keep their start and the extension.
+  function shortName310(name, max) {
+    const s = String(name || '');
+    const m = Math.max(10, num(max) || 28);
+    if (s.length <= m) return s;
+    const dot = s.lastIndexOf('.');
+    const ext = dot > 0 && s.length - dot <= 6 ? s.slice(dot) : '';
+    const keep = m - ext.length - 1;
+    const head = Math.ceil(keep * 0.6);
+    const tail = keep - head;
+    const stem = ext ? s.slice(0, dot) : s;
+    return `${stem.slice(0, head)}\u2026${tail > 0 ? stem.slice(-tail) : ''}${ext}`;
   }
 
   // ----------------------------------------------------------------- conversations
@@ -2074,6 +2172,8 @@ LL.views = {};
         requests: [], tab: 'all', shown: [], viewId: '', view: null, viewReq: null, sheet: null, del: null, menu: null, topMenu: false,
         // Bundle 307: Chats / Requests switch, search, what the cards showed last (to animate only changes).
         tab307: 'requests', q307: '', prev307: {}, drawn307: false,
+        // Bundle 310: live row page + scroll, the voice note playing, voice bytes on this PC.
+        page310: 0, scroll310: 0, play310: null, voiceUrls310: {}, voiceMeta310: {},
       };
 
       const root = document.createElement('div');
@@ -2381,6 +2481,14 @@ LL.views = {};
       // ------------------------------------------------ Bundle 307: bold cards
       const CHAT307 = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/></svg>';
       const CHECK307 = (n) => `<svg viewBox="0 0 24 24" width="${n}" height="${n}" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+      // Bundle 310: voice + live-row icons (Material paths, like the app).
+      const PLAY310 = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>';
+      const PAUSE310 = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>';
+      const DL310 = (n) => `<svg viewBox="0 0 24 24" width="${n}" height="${n}" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg>`;
+      const FILE310 = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/></svg>';
+      const WARN310 = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>';
+      const UPD310 = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M21 10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-.1a6.875 6.875 0 0 0 0 9.79 7.02 7.02 0 0 0 9.88 0C18.32 15.65 19 14.08 19 12.1h2c0 1.98-.88 4.55-2.64 6.29-3.51 3.48-9.21 3.48-12.72 0-3.5-3.47-3.53-9.11-.02-12.58a8.987 8.987 0 0 1 12.65 0L21 3v7.12z"/></svg>';
+      const CHEV310 = (d) => `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="${d < 0 ? 'M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z' : 'M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z'}"/></svg>`;
       const PLUS307 = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>';
       const GROUP307 = (n) => `<svg viewBox="0 0 24 24" width="${n}" height="${n}" aria-hidden="true"><path fill="#fff" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C15 14.17 10.33 13 8 13zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>`;
 
@@ -2408,16 +2516,16 @@ LL.views = {};
 
       function range307(q) { return rangeText((q && q.from) || '', (q && q.to) || ''); }
 
-      function track307() {
+      function track307(st) {
         return `<div class="ut307"><div class="ut-base"></div><div class="ut-fill"></div>
           <i class="ud" data-ud="1" style="left:33.333%"></i><i class="ud" data-ud="2" style="left:66.666%"></i>
-          <i class="ud end" data-ud="3" style="left:100%">${CHECK307(13)}</i><span class="car307">${CHAT307}</span></div>`;
+          <i class="ud end" data-ud="3" style="left:100%">${CHECK307(13)}</i><span class="car307">${st && st.k === 'old' ? WARN310 : CHAT307}</span></div>`;
       }
 
       // Step classes on the track stops: passed = done, the next one pulses.
       function stops307(st) {
         const step = { sent: 0, reached: 1, coming: 2, ready: 3, empty: 2, cancel: 0 }[st.k] || 0;
-        return [1, 2, 3].map((n) => (n <= step ? 'done' : (n === step + 1 && st.k !== 'empty' && st.k !== 'ready' && st.k !== 'cancel' ? 'next' : ''))).join(' ');
+        return [1, 2, 3].map((n) => (n <= step ? 'done' : (n === step + 1 && st.k !== 'empty' && st.k !== 'ready' && st.k !== 'cancel' && st.k !== 'old' ? 'next' : ''))).join(' ');
       }
 
       // The Uber-style live card (D2).
@@ -2432,7 +2540,38 @@ LL.views = {};
           <div class="hc-top"><span class="brand"><span class="bm">${CHAT307}</span>Get chat</span>${pair307(n.list, 40, n.group)}</div>
           <div class="hc-mid"><div class="hc-l"><div class="hc-big">${st.big}</div><div class="hc-sub">${ui.esc(st.sub)}</div></div>
             <div class="hc-r"><div class="hc-who">${ui.esc(n.title)}</div><div class="hc-rng">${ui.esc(range307(q))}</div></div></div>
-          ${track307()}
+          ${track307(st)}${phones310(q, st, true)}
+        </button>`;
+      }
+
+      // Bundle 310 (P3): one line per phone - why it has not answered yet.
+      function phones310(q, st, compact) {
+        const who = Array.isArray(q.who) ? q.who : [];
+        if (!who.length || st.k === 'ready' || st.k === 'empty' || st.k === 'cancel') return '';
+        const now = new Date();
+        const rows = who.slice(0, compact ? 3 : 6).map((p) => {
+          const w = why310(p, now);
+          const name = String(p.name || 'Phone');
+          const icon = w.k === 'old' ? UPD310 : (w.k === 'none' ? CHECK307(11) : `<i class="pd310${w.k === 'look' ? ' b' : ''}"></i>`);
+          return `<span class="pl310 ${w.k}">${face307(name, 20)}<b>${ui.esc(name)}</b><span class="plt" title="${ui.esc(w.text)}">${icon}<span class="plx">${ui.esc(w.text)}</span></span></span>`;
+        });
+        const more = who.length > (compact ? 3 : 6) ? `<span class="pl310 more">+${who.length - (compact ? 3 : 6)} more</span>` : '';
+        return `<div class="pls310${compact ? ' c' : ''}">${rows.join('')}${more}</div>`;
+      }
+
+      // Bundle 310 (E1): one live request = one wide card (no empty space).
+      function liveWide310(q) {
+        const st = step307(q);
+        const n = names307(q);
+        const prev = scope.prev307[q.id];
+        const p0 = prev ? prev.p : st.p;
+        const pop = prev && prev.k !== 'ready' && st.k === 'ready' ? ' pop' : '';
+        return `<button type="button" class="hc307 wide310 s-${st.k}${pop}" style="--p:${p0}" data-p307="${st.p}" data-id307="${ui.esc(q.id)}" data-stops307="${stops307(st)}"
+            data-conv221-open="${ui.esc(q.id)}" aria-label="View request ${ui.esc(n.title)}">
+          <div class="hc-top"><span class="brand"><span class="bm">${CHAT307}</span>Get chat</span><span class="sp"></span>
+            <div class="hc-r"><div class="hc-who">${ui.esc(n.title)}</div><div class="hc-rng">${ui.esc(range307(q))}</div></div>${pair307(n.list, 40, n.group)}</div>
+          <div class="hw310"><div class="hc-l"><div class="hc-big">${st.big}</div><div class="hc-sub">${ui.esc(st.sub)}</div></div>
+            <div class="hw-t">${track307(st)}</div></div>${phones310(q, st, false)}
         </button>`;
       }
 
@@ -2450,7 +2589,7 @@ LL.views = {};
         return `<div class="rq307 in307" style="--d:${i}" data-conv221-open="${ui.esc(q.id)}" role="button" tabindex="0" aria-label="View request ${ui.esc(n.title)}">
           ${pair307(n.list, 42, n.group)}
           <div class="rq-x"><div class="rq-t">${ui.esc(n.title)}</div><div class="rq-w">${ui.esc(st.sub)}</div>
-            <div class="rq-s"><span class="chip307 s-${st.k}">${ui.esc(st.chip)}</span><span class="rq-r">${ui.esc(range307(q))}</span>${cancel}</div></div>
+            <div class="rq-s"><span class="chip307 s-${st.k}">${ui.esc(st.chip)}</span><span class="rq-r">${ui.esc(range307(q))}</span>${cancel}</div>${phones310(q, st, true)}</div>
           ${ring307(st)}
         </div>`;
       }
@@ -2546,7 +2685,7 @@ LL.views = {};
               : '<div class="empty216">No chats on the server list yet. Use New request to ask the phones of any 2 people or a group.</div>');
         } else {
           const list = chatRequests307().filter((q) => match307(q.label));
-          const going = list.filter((q) => { const k = step307(q).k; return k === 'sent' || k === 'reached' || k === 'coming'; });
+          const going = list.filter((q) => { const k = step307(q).k; return k === 'sent' || k === 'reached' || k === 'coming' || k === 'old'; });
           const done = list.filter((q) => going.indexOf(q) < 0);
           body = `<div class="sec307"><span>In progress</span><span class="cnt">${going.length}</span></div>`
             + (going.length ? `<div class="stack307">${going.map(requestCard307).join('')}</div>`
@@ -2568,13 +2707,44 @@ LL.views = {};
             ${me ? `<span class="wme307" style="background:${color307(me)}" title="${ui.esc(me)}">${ui.esc(me[0].toUpperCase())}</span>` : ''}</div></div>`;
       }
 
-      // Live requests row (D2): up to 3 cards.
+      // Live requests row (D2 + 310 E1): 1 = one wide card, 2 = halves,
+      // 3 or more = 3 in a row; more scroll sideways (swipe, header arrows, dots).
       function liveRow307() {
         const live = liveList307();
         if (!live.length) return '';
-        return `<div class="wsec307"><b>Live requests</b><span class="cnt">${live.length}</span><span class="sp"></span>
+        const many = live.length > 3;
+        const pages = Math.ceil(Math.min(live.length, 12) / 3);
+        const pg = Math.min(scope.page310 || 0, pages - 1);
+        const arrows = many
+          ? `<button type="button" class="arr310" data-conv310-scroll="-1" aria-label="Previous requests"${pg <= 0 ? ' disabled' : ''}>${CHEV310(-1)}</button>
+            <button type="button" class="arr310" data-conv310-scroll="1" aria-label="Next requests"${pg >= pages - 1 ? ' disabled' : ''}>${CHEV310(1)}</button>` : '';
+        const cards = live.length === 1 ? liveWide310(live[0])
+          : `${live.slice(0, 3).map(liveCard307).join('')}${many ? live.slice(3, 12).map(liveCard307).join('') : ''}`;
+        const dots = many ? `<div class="dots310" aria-hidden="true">${Array.from({ length: pages }, (_, i) => `<i${i === pg ? ' class="on"' : ''}></i>`).join('')}</div>` : '';
+        return `<div class="wsec307"><b>Live requests</b><span class="cnt">${live.length}</span><span class="sp"></span>${arrows}
             <button type="button" class="lnk307" data-conv307-viewall>View all</button></div>
-          <div class="wlg307">${live.slice(0, 3).map(liveCard307).join('')}</div>`;
+          <div class="wlg307 n${live.length}${many ? ' many310' : ''}" data-conv310-row>${cards}</div>${dots}`;
+      }
+
+      // E1: the row keeps its place when the page refreshes; dots + arrows follow it.
+      function row310() {
+        const row = root.querySelector('[data-conv310-row].many310');
+        if (!row) return;
+        if (scope.scroll310) row.scrollLeft = scope.scroll310;
+        const sync = () => {
+          scope.scroll310 = row.scrollLeft;
+          const w = row.clientWidth || 1;
+          const pages = root.querySelectorAll('.dots310 i').length;
+          const pg = Math.max(0, Math.min(pages - 1, Math.round(row.scrollLeft / w)));
+          scope.page310 = pg;
+          root.querySelectorAll('.dots310 i').forEach((d, i) => d.classList.toggle('on', i === pg));
+          const prev = root.querySelector('[data-conv310-scroll="-1"]');
+          const next = root.querySelector('[data-conv310-scroll="1"]');
+          if (prev) prev.disabled = row.scrollLeft <= 2;
+          if (next) next.disabled = row.scrollLeft + w >= row.scrollWidth - 2;
+        };
+        row.addEventListener('scroll', sync, { passive: true });
+        sync();
       }
 
       function emptyViewer307() {
@@ -2657,38 +2827,173 @@ LL.views = {};
         return scope.requests.filter((q) => q.action === 'get_file' && q.file_id === fileId && q.state !== 'cancelled' && !q.closed)[0] || null;
       }
 
-      function att221(a, m) {
-        const isImage = /^image\//.test(String(a.type || ''));
-        const word = isImage ? 'photo' : 'file';
-        const thumb = a.thumb && /^[A-Za-z0-9+/=_-]+$/.test(a.thumb)
-          ? `<img class="th221" alt="${ui.esc(a.name || word)}" src="data:${a.thumb_type === 'image/png' ? 'image/png' : 'image/jpeg'};base64,${a.thumb}">`
-          : `<span class="th221 none">${ui.icon(isImage ? 'i-image' : 'i-file')}<small>${ui.esc(a.name || word)}</small></span>`;
+      // Bundle 310 (V2): a voice note like the app's voice row - round button,
+      // bars, length. Not on the PC yet (get) -> getting (ring) -> Ready (play)
+      // -> playing (bars + dot move). Old phones send no bars: flat bars + size.
+      function voice310(a, m) {
         const f = a.file_id ? fileRequest(a.file_id) : null;
-        let action;
-        if (a.file_gone) action = '<span class="gone221">File removed after 60 days \u00b7 thumbnail only</span>';
-        else if (partsDone(f)) action = `<button class="btn btn-sm" type="button" data-conv221-show="${ui.esc(f.id)}" data-image="${isImage ? '1' : ''}" data-name="${ui.esc(a.name || word)}">Show full ${word}</button>`;
-        else if (f) action = `<span class="subtle">${num(f.parts) ? `${f.parts} of ${f.of} parts` : 'Asked the phones \u00b7 waiting'}</span>`;
-        else if (a.file_id) action = `<button class="btn btn-sm" type="button" data-conv221-file="${ui.esc(a.file_id)}" data-mid="${ui.esc(m.id || '')}" data-name="${ui.esc(a.name || '')}">Get full ${word}</button>`;
-        else action = '';
-        return `<div class="att221">${thumb}${action}</div>`;
+        const meta = a.voice && typeof a.voice === 'object' ? a.voice : null;
+        const raw = meta ? meta.bars : null;
+        const levels = (typeof raw === 'string' && /[0-9]/.test(raw)) || (Array.isArray(raw) && raw.length) ? raw.slice(0, 400) : null;
+        const ms = meta ? num(meta.ms) : 0;
+        const size = num(a.size) > 0 ? fmt.bytes(a.size) : '';
+        const flat = !levels;
+        let label = ms > 0 ? len310(ms) : size;
+        let played = 0;
+        let btn;
+        if (a.file_gone) {
+          btn = `<span class="vbtn310 off">${DL310(24)}</span>`;
+          label = 'File removed after 60 days';
+        } else if (partsDone(f)) {
+          scope.voiceMeta310[f.id] = { levels, ms, flat, size };
+          const p = scope.play310 && scope.play310.id === f.id ? scope.play310 : null;
+          const on = !!(p && p.audio && !p.audio.paused);
+          if (p && p.audio) {
+            const d = (Number.isFinite(p.audio.duration) && p.audio.duration > 0 ? p.audio.duration * 1000 : ms) || 0;
+            const t = p.audio.currentTime * 1000;
+            played = d > 0 ? t / d : 0;
+            label = `${len310(t)} / ${d > 0 ? len310(d) : '\u2026'}`;
+          }
+          btn = p && p.loading
+            ? `<span class="vbtn310 ring spin"><svg viewBox="0 0 42 42" width="42" height="42"><circle cx="21" cy="21" r="18" class="rb"/><circle cx="21" cy="21" r="18" class="rf" stroke-dasharray="113.1" stroke-dashoffset="80"/></svg></span>`
+            : `<button type="button" class="vbtn310" data-conv310-play="${ui.esc(f.id)}" aria-label="${on ? 'Pause' : 'Play'} voice note">${on ? PAUSE310 : PLAY310}</button>`;
+        } else if (f) {
+          const pct = num(f.of) > 0 ? Math.min(100, Math.round(100 * num(f.parts) / num(f.of))) : 0;
+          const off = (113.1 * (1 - Math.max(0.08, pct / 100))).toFixed(1);
+          const stop = !num(f.parts) && f.state === 'pending'
+            ? `<button type="button" class="vx310" data-conv307-cancel="${ui.esc(f.id)}" aria-label="Stop getting the voice note">${ui.icon('i-close')}</button>` : '';
+          btn = `<span class="vbtn310 ring${pct ? '' : ' spin'}" title="${num(f.parts) ? `${f.parts} of ${f.of} parts` : 'Asked the phones \u00b7 waiting'}"><svg viewBox="0 0 42 42" width="42" height="42"><circle cx="21" cy="21" r="18" class="rb"/><circle cx="21" cy="21" r="18" class="rf" stroke-dasharray="113.1" stroke-dashoffset="${off}"/></svg>${stop}</span>`;
+          label = num(f.parts) ? `${f.parts} of ${f.of} parts` : `Getting \u00b7 ${label || 'voice note'}`;
+        } else if (a.file_id) {
+          btn = `<button type="button" class="vbtn310" data-conv221-file="${ui.esc(a.file_id)}" data-mid="${ui.esc(m.id || '')}" data-name="${ui.esc(a.name || '')}" aria-label="Get the voice note from the phone" title="Get it from the phone">${DL310(24)}</button>`;
+        } else {
+          btn = `<span class="vbtn310 off">${PLAY310}</span>`;
+        }
+        return `<div class="vo310${flat ? ' flat' : ''}" data-vo310="${f ? ui.esc(f.id) : ''}">${btn}<div class="vcol310">${bars310(levels, 150, played, flat)}<div class="vlab310">${ui.esc(label)}</div></div></div>`;
       }
 
-      function bubble221(m, i) {
+      // V2: play the voice note on this PC (the bytes come with the login header).
+      async function play310(id) {
+        const cur = scope.play310;
+        if (cur && cur.id === id && cur.audio) {
+          if (cur.audio.paused) cur.audio.play().catch(() => {}); else cur.audio.pause();
+          draw();
+          return;
+        }
+        if (cur && cur.loading) return;
+        stopVoice310();
+        scope.play310 = { id, loading: true, audio: null };
+        draw();
+        try {
+          let url = scope.voiceUrls310[id];
+          if (!url) {
+            url = await ctx.blob(`/api/v1/admin/chat-requests/${encodeURIComponent(id)}/answer?download=1`);
+            scope.voiceUrls310[id] = url;
+          }
+          if (!scope.play310 || scope.play310.id !== id) return;
+          const audio = new Audio(url);
+          scope.play310 = { id, loading: false, audio };
+          audio.addEventListener('timeupdate', tick310);
+          audio.addEventListener('ended', () => { if (scope.play310 && scope.play310.audio === audio) { scope.play310 = null; draw(); } });
+          audio.addEventListener('error', () => { if (scope.play310 && scope.play310.audio === audio) { scope.play310 = null; ctx.toast('Could not play this voice note', 'error'); draw(); } });
+          await audio.play();
+          draw();
+        } catch (err) {
+          scope.play310 = null;
+          ctx.toast((err && err.message) || 'Could not play this voice note', 'error');
+          draw();
+        }
+      }
+
+      // V2: bars + time follow the sound without redrawing the page.
+      function tick310() {
+        const p = scope.play310;
+        if (!p || !p.audio) return;
+        if (!root.isConnected) { stopVoice310(true); return; }
+        const node = Array.from(root.querySelectorAll('[data-vo310]')).filter((x) => x.getAttribute('data-vo310') === p.id)[0];
+        if (!node) return;
+        const meta = scope.voiceMeta310[p.id] || {};
+        const d = (Number.isFinite(p.audio.duration) && p.audio.duration > 0 ? p.audio.duration * 1000 : num(meta.ms)) || 0;
+        const t = p.audio.currentTime * 1000;
+        const svg = node.querySelector('.wave310');
+        const lab = node.querySelector('.vlab310');
+        if (svg) svg.outerHTML = bars310(meta.levels, 150, d > 0 ? t / d : 0, !!meta.flat);
+        if (lab) lab.textContent = `${len310(t)} / ${d > 0 ? len310(d) : '\u2026'}`;
+      }
+
+      // Leaving the chat (or the page) stops the sound; all = also free the bytes.
+      function stopVoice310(all) {
+        const p = scope.play310;
+        if (p && p.audio) { p.audio.pause(); p.audio.removeAttribute('src'); }
+        scope.play310 = null;
+        if (all) {
+          Object.keys(scope.voiceUrls310).forEach((k) => URL.revokeObjectURL(scope.voiceUrls310[k]));
+          scope.voiceUrls310 = {};
+          scope.voiceMeta310 = {};
+        }
+      }
+
+      function att221(a, m, onPhoto) {
+        if (isVoice310(a)) return voice310(a, m);
+        const type = String(a.type || '');
+        const isImage = /^image\//.test(type);
+        const word = isImage ? 'photo' : (/^video\//.test(type) ? 'video' : 'file');
+        const name = a.name || word;
+        const size = num(a.size) > 0 ? fmt.bytes(a.size) : '';
+        const hasThumb = !!(a.thumb && /^[A-Za-z0-9+/=_-]+$/.test(a.thumb));
+        const f = a.file_id ? fileRequest(a.file_id) : null;
+        const wait = f && !partsDone(f) ? (num(f.parts) ? `${f.parts} of ${f.of} parts` : 'Asked the phones \u00b7 waiting') : '';
+        if (hasThumb) {
+          // Photo / video picture: the action sits on the picture like the app.
+          const img = `<img class="th221" alt="${ui.esc(name)}" src="data:${a.thumb_type === 'image/png' ? 'image/png' : 'image/jpeg'};base64,${a.thumb}">`;
+          let pill = '';
+          if (a.file_gone) pill = '';
+          else if (partsDone(f)) pill = `<button class="phg310" type="button" data-conv221-show="${ui.esc(f.id)}" data-image="${isImage ? '1' : ''}" data-name="${ui.esc(name)}">${isImage ? ui.icon('i-image') : DL310(18)}<b>Show full ${word}</b></button>`;
+          else if (f) pill = `<span class="phg310 wait"><b>${ui.esc(wait)}</b></span>`;
+          else if (a.file_id) pill = `<button class="phg310" type="button" data-conv221-file="${ui.esc(a.file_id)}" data-mid="${ui.esc(m.id || '')}" data-name="${ui.esc(a.name || '')}">${DL310(18)}<b>Get full ${word}${size ? ` \u00b7 ${ui.esc(size)}` : ''}</b></button>`;
+          return `<div class="att221 ph310">${img}${pill}${onPhoto ? `<span class="pht310">${onPhoto}</span>` : ''}</div>`
+            + (a.file_gone ? '<span class="gone221">File removed after 60 days \u00b7 thumbnail only</span>' : '');
+        }
+        // A file (or a picture without a thumbnail): icon, short name, size, action.
+        const ext = (/\.([A-Za-z0-9]{1,5})$/.exec(name) || [])[1] || '';
+        const meta = a.file_gone ? 'File removed after 60 days' : (wait || [size, ext ? ext.toUpperCase() : (isImage ? 'Photo' : '')].filter(Boolean).join(' \u00b7 '));
+        let action = '';
+        if (a.file_gone) action = '';
+        else if (partsDone(f)) action = `<button class="fd310 ready" type="button" data-conv221-show="${ui.esc(f.id)}" data-image="${isImage ? '1' : ''}" data-name="${ui.esc(name)}" title="Show full ${word}" aria-label="Show full ${word}">${DL310(20)}</button>`;
+        else if (f) action = `<span class="fd310 ring spin" title="${ui.esc(wait)}"><svg viewBox="0 0 42 42" width="34" height="34"><circle cx="21" cy="21" r="18" class="rb"/><circle cx="21" cy="21" r="18" class="rf" stroke-dasharray="113.1" stroke-dashoffset="80"/></svg></span>`;
+        else if (a.file_id) action = `<button class="fd310" type="button" data-conv221-file="${ui.esc(a.file_id)}" data-mid="${ui.esc(m.id || '')}" data-name="${ui.esc(a.name || '')}" title="Get full ${word}" aria-label="Get full ${word}">${DL310(20)}</button>`;
+        return `<div class="att221 fr310"><span class="fi310">${isImage ? ui.icon('i-image') : FILE310}</span>
+          <div class="fx310"><div class="fn310" title="${ui.esc(name)}">${ui.esc(shortName310(name, 22))}</div><div class="fm310">${ui.esc(meta)}</div></div>${action}</div>`;
+      }
+
+      // Bundle 310 (V3): bubbles like the app's Messages screen - time at the
+      // bottom inside the bubble, names only in groups (first bubble of a run),
+      // the menu only on hover / focus, the app's own colours.
+      function bubble221(m, i, first) {
         const side = sideOf(m);
         // Bundle 307 (D6): no route words on the page (ROUTE221 stays for old code).
         const route = '';
-        const cls = ['chat-bubble', side, 'b221', m.deleted_at ? 'hid221' : '', m.outside ? 'margin221' : ''].filter(Boolean).join(' ');
+        const v = scope.view || {};
+        const group = !!(v.chat && v.chat.kind === 'group');
+        const name = ui.name276({ display_name: m.sender_name, username: m.sender_username });
+        const showName = group && first !== false && side === 'in';
+        const atts = Array.isArray(m.attachments) ? m.attachments : [];
+        const time = `<span class="ft310">${ui.esc(time12(m.created_at))}</span>`;
+        const a0 = atts[0] || {};
+        const photoOnly = !m.body && !m.deleted_at && atts.length === 1 && !isVoice310(a0) && !!(a0.thumb && /^[A-Za-z0-9+/=_-]+$/.test(a0.thumb));
+        const cls = ['chat-bubble', side, 'b221', m.deleted_at ? 'hid221' : '', m.outside ? 'margin221' : '', photoOnly ? 'tight310' : '', first === false ? 'cont310' : ''].filter(Boolean).join(' ');
         const menu = scope.menu === i
           ? `<div class="menu221" role="menu">
               ${m.body ? `<button type="button" data-conv221-copy="${i}">Copy text</button>` : ''}
               <button type="button" class="danger" data-conv221-delmsg="${i}">Delete completely</button>
             </div>` : '';
-        return `<div class="chat-row ${side}"><div class="${cls}">
-            <div class="head221"><b class="who221">${ui.esc(ui.name276({ display_name: m.sender_name, username: m.sender_username }))}</b>${route}<span class="t221">${ui.esc(time12(m.created_at))}</span>
-              <button class="kebab221" type="button" data-conv221-menu="${i}" aria-label="Message menu"><i></i><i></i><i></i></button></div>
-            ${m.body ? `<div class="chat-body">${ui.esc(m.body)}</div>` : ''}
-            ${(Array.isArray(m.attachments) ? m.attachments : []).map((a) => att221(a, m)).join('')}
+        return `<div class="chat-row ${side}"><div class="${cls}">${route}
+            <button class="kebab221${scope.menu === i ? ' on' : ''}" type="button" data-conv221-menu="${i}" aria-label="Message menu"><i></i><i></i><i></i></button>
+            ${showName ? `<div class="bn310" style="color:${color307(name)}">${ui.esc(name)}</div>` : ''}
+            ${m.body ? `<div class="chat-body">${ui.esc(m.body)}${time}</div>` : ''}
+            ${atts.map((a) => att221(a, m, photoOnly ? time : '')).join('')}
             ${m.deleted_at ? `<span class="del221">Deleted by user \u00b7 ${ui.esc(delWhen(m.deleted_at))}</span>` : ''}
+            ${!m.body && !photoOnly ? `<div class="ftb310">${time}</div>` : ''}
             ${menu}
           </div></div>`;
       }
@@ -2702,7 +3007,9 @@ LL.views = {};
           if (day && day !== lastDay) { head += `<div class="day221"><span>${ui.esc(day)}</span></div>`; lastDay = day; }
           if (m.outside && !inMargin) head += '<div class="chip221">Outside the dates (phone clock)</div>';
           inMargin = !!m.outside;
-          return head + bubble221(m, i);
+          const prev = messages[i - 1];
+          const first = !prev || !!head || (prev.sender || prev.sender_name) !== (m.sender || m.sender_name);
+          return head + bubble221(m, i, first);
         }).join('')}</div>`;
       }
 
@@ -2714,6 +3021,14 @@ LL.views = {};
           return `<div class="prog221"><b>${v.parts} of ${v.of} parts \u00b7 the rest is on the way</b><span class="bar"><i style="width:${pct}%"></i></span></div>`;
         }
         const q = scope.viewReq || {};
+        // Bundle 310 (P3 / P4): each phone's reason, and "Old app" when stuck.
+        if (Array.isArray(q.who) && q.who.length) {
+          const st = step307(q);
+          const head = q.stuck === 'old_app'
+            ? `Old app on ${q.who.length} phone${q.who.length === 1 ? '' : 's'} \u00b7 Update LinkUp on these phones \u00b7 still open`
+            : 'Pending \u00b7 waiting for a phone in this chat';
+          return `<div class="prog221"><b>${head}</b>${phones310(q, st, true)}<small>The request goes to every phone, friends or not. No time limit.</small></div>`;
+        }
         return `<div class="prog221"><b>${num(q.old_app) > 0 ? 'Pending \u00b7 old app: the phones in this chat must update to 3.0.61 to answer' : 'Pending \u00b7 waiting for a phone in this chat'}</b><small>The request goes to every phone, friends or not. No time limit.</small></div>`;
       }
 
@@ -2881,7 +3196,7 @@ LL.views = {};
           ${sheet221()}
         </div>`;
         hydrateMedia();
-        if (scope.mode !== 'thread' && !scope.loading) animate307();
+        if (scope.mode !== 'thread' && !scope.loading) { animate307(); row310(); }
       }
 
       async function loadRequests() {
@@ -2916,6 +3231,7 @@ LL.views = {};
       }
 
       function openViewer(id) {
+        if (id !== scope.viewId) stopVoice310(true); // Bundle 310
         scope.mode = 'viewer';
         scope.viewId = id;
         scope.view = null;
@@ -3175,6 +3491,13 @@ LL.views = {};
           return;
         }
         if (hit('[data-conv307-search]')) return;
+        // ---- Bundle 310: live row arrows, voice notes
+        if ((node = hit('[data-conv310-scroll]'))) {
+          const row = root.querySelector('[data-conv310-row]');
+          if (row) row.scrollBy({ left: Number(node.getAttribute('data-conv310-scroll')) * row.clientWidth, behavior: 'smooth' });
+          return;
+        }
+        if ((node = hit('[data-conv310-play]'))) { play310(node.getAttribute('data-conv310-play')); return; }
         // ---- list
         if ((node = hit('[data-conv221-tab]'))) { scope.tab = node.getAttribute('data-conv221-tab'); draw(); return; }
         if (hit('[data-conv221-new]')) { openSheet(null); return; }
@@ -3190,8 +3513,9 @@ LL.views = {};
         }
         if ((node = hit('[data-conv221-open]'))) { openViewer(node.getAttribute('data-conv221-open')); return; }
         // ---- viewer
-        if (hit('[data-conv221-back]')) { scope.mode = 'list'; scope.view = null; scope.viewId = ''; scope.del = null; draw(); loadList(true); return; }
+        if (hit('[data-conv221-back]')) { stopVoice310(true); scope.mode = 'list'; scope.view = null; scope.viewId = ''; scope.del = null; draw(); loadList(true); return; }
         if (hit('[data-conv221-close]')) {
+          stopVoice310(true); // Bundle 310
           ctx.api(`/api/v1/admin/chat-requests/${encodeURIComponent(scope.viewId)}/close`, { method: 'POST' })
             .then(() => ctx.toast('Closed \u00b7 the copy on the server is deleted now', 'success'))
             .catch((err) => ctx.toast(err.message || 'Could not close', 'error'))

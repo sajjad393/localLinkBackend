@@ -1765,3 +1765,121 @@ button.chip307 { cursor: pointer; }
 .play307 .in307, .play307 .hc307 { animation: rowin307 .5s cubic-bezier(.2,.8,.2,1) both; animation-delay: calc(var(--d, 0) * 60ms + 80ms); }
 @keyframes rowin307 { from { opacity: 0; transform: translateY(12px) scale(.98); } to { opacity: 1; transform: none; } }
 /* reduce motion for 307: inside the 216/217 reduce-motion block above */
+
+/* ==========================================================================
+   Bundle 310 — web Conversations like the app's Messages screen (TODO_310).
+   App colours: LocalLinkTheme (Material 3 from #1E5BFF), read from the app. */
+.conv221 { --a-surface: #faf8ff; --a-in: #e3e1e9; --a-out: #efedf4; --a-on: #1a1b21; --a-onv: #45464f; --a-pri: #1e5bff; --a-chip: #e9e7ef; }
+[data-theme="dark"] .conv221 { --a-surface: #121318; --a-in: #34343a; --a-out: #1e1f25; --a-on: #e3e1e9; --a-onv: #c6c5d0; --a-pri: #8ea6ff; --a-chip: #292a2f; }
+
+/* E1: 1 = one wide card, 2 = halves, 3+ = 3 in a row (more scroll sideways) */
+.wlg307.n1 { grid-template-columns: 1fr; }
+.wlg307.n2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.wlg307.many310 { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: calc((100% - 28px) / 3); overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; margin-bottom: 8px; padding: 2px 2px 8px; }
+.wlg307.many310::-webkit-scrollbar { display: none; }
+.conv221 > .c307, .wlg307.many310 { min-width: 0; }
+.wlg307.many310 > .hc307 { scroll-snap-align: start; }
+@media (max-width: 1100px) { .wlg307.n2 { grid-template-columns: 1fr; } .wlg307.many310 { grid-auto-columns: 100%; } }
+.arr310 { width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--k-card); color: var(--k-ink); box-shadow: var(--k-shadow); display: grid; place-items: center; cursor: pointer; padding: 0; }
+.arr310:disabled { opacity: .4; cursor: default; }
+.dots310 { display: flex; justify-content: center; gap: 6px; margin: 0 0 16px; }
+.dots310 i { width: 7px; height: 7px; border-radius: 50%; background: var(--k-dash); transition: width .25s, background .25s; }
+.dots310 i.on { width: 18px; border-radius: 4px; background: var(--k-blue); }
+.hc307.wide310 .hc-top .hc-r { margin-right: 4px; }
+.hc307.wide310 .hc-top .sp { flex: 1; }
+.hc307.wide310 .hc-top { gap: 12px; }
+.hw310 { display: flex; align-items: center; gap: 40px; margin-top: 10px; }
+.hw310 .hc-l { width: 340px; flex: none; }
+.hw310 .hw-t { flex: 1; min-width: 0; }
+.hw310 .ut307 { margin-top: 0; }
+@media (max-width: 900px) { .hw310 { display: block; } .hw310 .hc-l { width: auto; } .hw310 .ut307 { margin-top: 16px; } }
+
+/* P4: every phone on an old app */
+.hc307.s-old { --c: #f04438; }
+[data-theme="dark"] .hc307.s-old { --c: #f97066; }
+.s-old .hc-big b { color: var(--c); }
+.s-old .car307 { left: 13px; }
+.chip307.s-old { background: rgba(240, 68, 56, .12); color: #d92d20; }
+[data-theme="dark"] .chip307.s-old { background: rgba(249, 112, 102, .16); color: #f97066; }
+.ring307.s-old { --rc: #f04438; }
+
+/* P3: why each phone waits */
+.pls310 { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--k-line); }
+.pls310.c { flex-direction: column; gap: 6px; margin-top: 12px; padding-top: 10px; }
+.pl310 { display: inline-flex; align-items: center; gap: 7px; min-width: 0; font-size: 12.5px; background: var(--k-card2); border-radius: 12px; padding: 6px 11px 6px 6px; }
+.pls310.c .pl310 { background: none; padding: 0; }
+.pl310 b { font-weight: 700; flex: none; }
+.pl310 .lt307 { font-size: 9.5px !important; }
+.pl310 .plt { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--k-grey); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl310 .plt svg { flex: none; }
+.pl310.old .plt { color: var(--k-orange); font-weight: 600; }
+.s-old .pl310.old .plt { color: var(--c); }
+.rq307 .pls310 { margin-top: 8px; padding-top: 8px; }
+.pls310.c .pl310 { max-width: 100%; }
+.pl310 .plx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prog221 .pls310 { margin-top: 4px; padding-top: 8px; border-top-color: rgba(127, 140, 170, .25); }
+.prog221 .pl310 .plt { color: inherit; opacity: .8; }
+.prog221 .pl310.old .plt { color: var(--k-orange); opacity: 1; }
+.pl310.look .plt { color: var(--k-blueT); }
+.pl310.more { color: var(--k-grey); font-weight: 600; }
+.pd310 { width: 7px; height: 7px; border-radius: 50%; background: var(--k-grey2); display: inline-block; flex: none; }
+.pd310.b { background: var(--k-blueT); }
+
+/* V3: the thread on the app's surface, bubbles in the app's greys */
+.wv307 .vmain221 { background: var(--a-surface); color: var(--a-on); border: 0; border-radius: 14px; padding: 10px 12px 12px; }
+.wv307 .t221wrap { gap: 5px; }
+.wv307 .day221 { margin: 8px 0 6px; }
+.wv307 .day221 span { background: var(--a-chip); color: var(--a-onv); font-size: 11.5px; font-weight: 500; padding: 4px 11px; }
+.wv307 .b221, [data-theme="dark"] .wv307 .b221.out { min-width: 0; max-width: 82%; padding: 8px 12px 4px; border: 0; box-shadow: none; border-radius: 18px 18px 18px 6px; background: var(--a-in); color: var(--a-on); }
+.wv307 .b221.out, [data-theme="dark"] .wv307 .b221.out { background: var(--a-out); border-radius: 18px 18px 6px 18px; }
+.wv307 .b221.hid221 { background: transparent !important; border: 1px dashed var(--a-onv); }
+.wv307 .b221 .chat-body { color: var(--a-on); font-size: 14px; line-height: 1.4; }
+.wv307 .b221.tight310 { padding: 3px; }
+.bn310 { font-size: 12.5px; font-weight: 700; margin-bottom: 1px; }
+.ft310 { float: right; margin: 5px 0 -2px 10px; font-size: 11px; font-weight: 500; line-height: 1.4; white-space: pre; color: color-mix(in srgb, var(--a-on) 62%, transparent); }
+.ftb310 { display: flex; justify-content: flex-end; margin-top: -2px; }
+.ftb310 .ft310 { float: none; margin: 0 0 0 10px; }
+.b221 .kebab221 { opacity: 0; position: absolute; top: 2px; right: -32px; width: 26px; height: 26px; border-radius: 50%; background: var(--a-chip); color: var(--a-onv); transition: opacity .15s; }
+.chat-bubble.out.b221 .kebab221 { right: auto; left: -32px; }
+.b221:hover .kebab221, .chat-row:hover > .b221 .kebab221, .b221 .kebab221:focus-visible, .b221 .kebab221.on { opacity: 1; }
+.b221 .kebab221 i { width: 3.5px; height: 3.5px; }
+.wv307 .b221 .menu221 { left: calc(100% + 40px); }
+.wv307 .chat-bubble.out.b221 .menu221 { left: auto; right: calc(100% + 40px); }
+.wv307 .del221 { background: var(--a-chip); color: var(--a-onv); }
+
+/* V2: voice note like the app's voice row */
+.vo310 { display: flex; align-items: center; gap: 10px; padding: 4px 0 2px; width: 224px; max-width: 100%; }
+.vbtn310 { width: 42px; height: 42px; border-radius: 50%; border: 0; padding: 0; background: var(--a-pri); color: #fff; display: grid; place-items: center; flex: none; position: relative; cursor: pointer; }
+[data-theme="dark"] .vbtn310 { color: #0b1a4d; }
+.vbtn310.off { opacity: .45; cursor: default; }
+.vbtn310.ring { background: none; color: var(--a-on); cursor: default; }
+.vbtn310.ring > svg, .fd310.ring > svg { position: absolute; inset: 0; }
+.vbtn310.ring .rb, .fd310.ring .rb { fill: none; stroke: color-mix(in srgb, var(--a-onv) 22%, transparent); stroke-width: 3; }
+.vbtn310.ring .rf, .fd310.ring .rf { fill: none; stroke: var(--a-pri); stroke-width: 3; stroke-linecap: round; transform: rotate(-90deg); transform-origin: center; transition: stroke-dashoffset .4s; }
+.vbtn310.spin > svg, .fd310.spin > svg { animation: spin310 1.1s linear infinite; }
+@keyframes spin310 { to { transform: rotate(360deg); } }
+.vx310 { position: relative; width: 26px; height: 26px; border: 0; border-radius: 50%; background: none; color: var(--a-on); display: grid; place-items: center; cursor: pointer; padding: 0; }
+.vx310 svg { width: 16px; height: 16px; }
+.vcol310 { flex: 1; min-width: 0; }
+.wave310 { display: block; max-width: 100%; }
+.wave310 .wb { fill: color-mix(in srgb, var(--a-onv) 35%, transparent); }
+.wave310 .wp, .wave310 .wd { fill: var(--a-pri); }
+.vlab310 { font-size: 11px; font-weight: 500; color: var(--a-onv); margin-top: 4px; white-space: nowrap; }
+
+/* photo with its action on the picture, file rows with short names */
+.att221.ph310 { position: relative; display: block; margin: 0; border-radius: 15px; overflow: hidden; width: max-content; max-width: 100%; }
+.ph310 .th221 { width: 220px; border-radius: 15px; }
+.phg310 { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: inline-flex; align-items: center; gap: 6px; border: 0; background: rgba(0, 0, 0, .55); color: #fff; border-radius: 999px; padding: 7px 12px 7px 9px; font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.phg310 b { font-weight: 500; white-space: nowrap; }
+.phg310.wait { cursor: default; }
+.phg310 svg { width: 18px; height: 18px; }
+.pht310 .ft310 { position: absolute; right: 8px; bottom: 6px; float: none; margin: 0; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
+.att221.fr310 { display: flex; align-items: center; gap: 10px; width: 280px; max-width: 100%; margin: 0; padding: 6px 2px 2px; flex-wrap: nowrap; }
+.fi310 { width: 40px; height: 40px; border-radius: 10px; background: color-mix(in srgb, var(--a-pri) 16%, transparent); color: var(--a-pri); display: grid; place-items: center; flex: none; }
+.fi310 svg { width: 22px; height: 22px; }
+.fx310 { flex: 1; min-width: 0; }
+.fn310 { color: var(--a-on); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fm310 { font-size: 11px; color: var(--a-onv); margin-top: 1px; }
+.fd310 { width: 34px; height: 34px; border-radius: 50%; border: 1.5px solid color-mix(in srgb, var(--a-onv) 40%, transparent); background: none; color: var(--a-onv); display: grid; place-items: center; flex: none; position: relative; padding: 0; cursor: pointer; }
+.fd310.ready { border: 0; background: var(--a-pri); color: #fff; }
+.fd310.ring { border: 0; cursor: default; }

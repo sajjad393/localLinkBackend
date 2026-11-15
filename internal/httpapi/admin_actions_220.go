@@ -874,6 +874,7 @@ func (a *API) AdminActionsSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	applied, rejected, capped := a.takeAdminActionsIn(deviceID, &in)
+	a.noteCheckin310(deviceID) // Bundle 310 (P3): last admin check-in
 	have := map[string]bool{}
 	for _, id := range in.Have {
 		have[id] = true
@@ -931,6 +932,7 @@ func (a *API) AdminActionsMine(w http.ResponseWriter, r *http.Request) {
 	}
 	in.Cards, in.Labels = nil, nil // only its own receipts
 	_, _, _ = a.takeAdminActionsIn(id, &in)
+	a.noteCheckin310(id) // Bundle 310 (P3)
 	cards := []signedBlob{}
 	ids := []string{}
 	rows, err := a.store.DB().Query(`SELECT id,body,sig,targets_json,state FROM admin_actions WHERE targets_json LIKE ? ORDER BY made_at ASC LIMIT 200`, "%\""+id+"\"%")

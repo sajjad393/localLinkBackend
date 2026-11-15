@@ -924,6 +924,10 @@ type chatRequestRow struct {
 	// Bundle 307 (live card): phones asked / phones that answered anything.
 	Phones  int `json:"phones"`
 	Reached int `json:"reached"`
+	// Bundle 310 (P3/P4): why each phone has not answered; "old_app" when
+	// every phone is too old to say "no copy" and 30 min went by.
+	Who   []chatPhone310 `json:"who,omitempty"`
+	Stuck string         `json:"stuck,omitempty"`
 }
 
 // AdminChatRequestList: GET /api/v1/admin/chat-requests
@@ -975,6 +979,12 @@ func (a *API) AdminChatRequestList(w http.ResponseWriter, r *http.Request) {
 				_ = a.store.DB().QueryRow(`SELECT build FROM device_builds WHERE device_id=?`, t.Device).Scan(&build)
 				if build > 0 && build < chatAnswerAppBuild {
 					row.OldApp++
+				}
+			}
+			if row.Action == "get_chat" || row.Action == "get_file" {
+				row.Who = a.chatPhones310(row.ID, row.MadeAt, targets)
+				if stuckOldApp310(row.MadeAt, row.Who, time.Now()) {
+					row.Stuck = "old_app"
 				}
 			}
 		}

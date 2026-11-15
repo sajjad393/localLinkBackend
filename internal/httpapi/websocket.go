@@ -124,6 +124,7 @@ func (a *API) WebSocket(w http.ResponseWriter, r *http.Request) {
 
 	_ = client.WriteText(mustJSON(WSMessage{Type: "ready", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}))
 	a.pushNetworkPolicyToDevice(deviceID)
+	a.hintOnConnect310(deviceID, client) // Bundle 310 (P2): open card for this phone -> check now
 
 	stopPing := make(chan struct{})
 	defer close(stopPing)
