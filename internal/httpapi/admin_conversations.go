@@ -44,6 +44,8 @@ type conversationSummary struct {
 	MessageCount  int                       `json:"message_count"`
 	LastMessageAt string                    `json:"last_message_at"`
 	OnServer      int                       `json:"on_server"` // bundle 221: still on the server
+	// Bundle 314: the admin's own user is in this chat (no Get chat).
+	Me bool `json:"me,omitempty"`
 }
 
 type conversationMessage struct {
@@ -174,7 +176,8 @@ func (a *API) deviceLabels(ids []string) (map[string]conversationParticipant, er
 // first. It deliberately carries no message text: an administrator reading
 // snippets here would bypass the audit trail that the thread reads create.
 func (a *API) AdminConversations(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.requireAdminPermission(w, r, conversationPermission); !ok {
+	admin, ok := a.requireAdminPermission(w, r, conversationPermission)
+	if !ok {
 		return
 	}
 	params, err := parsePageParams(r, "admin-conversations")
@@ -267,6 +270,7 @@ SELECT kind,cid,user_a,user_b,group_id,group_name,message_count,last_at,on_serve
 		}
 	}
 
+	groupMe := a.groupMe314(admin, groupIDs) // Bundle 314
 	out := make([]conversationSummary, 0, len(raw))
 	for _, c := range raw {
 		summary := conversationSummary{
@@ -280,7 +284,9 @@ SELECT kind,cid,user_a,user_b,group_id,group_name,message_count,last_at,on_serve
 			summary.GroupID = c.groupID
 			summary.GroupName = c.groupName
 			summary.MemberCount = memberCounts[c.groupID]
+			summary.Me = groupMe[c.groupID]
 		} else {
+			summary.Me = a.deviceIsAdmin314(admin, c.userA) || a.deviceIsAdmin314(admin, c.userB)
 			for _, id := range []string{c.userA, c.userB} {
 				label, ok := labels[id]
 				if !ok {

@@ -89,6 +89,7 @@
       const message = (data && (data.error || data.message)) || `Request failed (${response.status})`;
       const failure = new Error(message);
       failure.status = response.status; // Bundle 219: boot tells 5xx (retry) from other errors.
+      failure.data = data; // Bundle 314: e.g. already_asked + open_id
       throw failure;
     }
     return data;

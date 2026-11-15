@@ -2446,7 +2446,8 @@ LL.views = {};
               : '<small class="subtle">0 on server</small>'}`;
           }
           let button;
-          if (!q) button = `<button class="btn btn-sm" type="button" data-conv221-ask="${i}">Request from phones</button>`;
+          if (!q && r && r.me) button = ''; // Bundle 314: my own chat, already on my phone
+          else if (!q) button = `<button class="btn btn-sm" type="button" data-conv221-ask="${i}">Request from phones</button>`;
           else if (num(q.parts) > 0) button = `<button class="btn btn-primary btn-sm" type="button" data-conv221-open="${ui.esc(q.id)}">Open</button>`;
           else button = `<button class="btn btn-sm" type="button" data-conv221-open="${ui.esc(q.id)}">View request</button>`;
           return [
@@ -2646,6 +2647,8 @@ LL.views = {};
           right = st.k === 'ready'
             ? `<button type="button" class="open307" data-conv221-open="${ui.esc(q.id)}">${CHAT307}Open</button>`
             : `<button type="button" class="chip307 s-${st.k}" data-conv221-open="${ui.esc(q.id)}" aria-label="View request">${ui.esc(st.short)}</button>`;
+        } else if (r && r.me) {
+          right = ''; // Bundle 314: my own chat, already on my phone
         } else {
           right = `<button type="button" class="gc307" data-conv221-ask="${i}" title="Request from phones">${ui.icon('i-download')}Get chat</button>`;
         }
@@ -3133,7 +3136,7 @@ LL.views = {};
         } else {
           who = `${ui.chips216([{ value: 'direct', label: 'Private chat' }, { value: 'group', label: 'Group' }], s.kind, 'data-conv221-kind')}
             ${s.kind === 'group'
-              ? `<label class="field221">Group<select data-conv221-g><option value="">Pick a group</option>${option(s.groups, s.group, (g) => `${g.name} (${g.members} members)`)}</select></label>`
+              ? `<label class="field221">Group<select data-conv221-g><option value="">Pick a group</option>${option(s.groups, s.group, (g) => g.nearby ? `${g.name} \u00b7 Nearby \u00b7 ${g.members} members` : `${g.name} (${g.members} members)`)}</select></label>`
               : `<label class="field221">Person 1<select data-conv221-a><option value="">Pick a person</option>${option(s.users, s.a, userLabel)}</select></label>
                  <label class="field221">Person 2<select data-conv221-b><option value="">Pick a person</option>${option(s.users, s.b, userLabel)}</select></label>`}`;
         }
@@ -3251,8 +3254,12 @@ LL.views = {};
           settle(ctx.api('/api/v1/admin/groups?limit=200')),
         ]);
         if (!scope.sheet) return;
-        scope.sheet.users = users.ok && Array.isArray(users.data.users) ? users.data.users : [];
-        scope.sheet.groups = groups.ok && Array.isArray(groups.data.groups) ? groups.data.groups : [];
+        // Bundle 314: chats I'm in are already on my phone - not listed (me = my app user).
+        const meId = (ctx.session && ctx.session.user_id) || '';
+        scope.sheet.users = (users.ok && Array.isArray(users.data.users) ? users.data.users : []).filter((u) => !meId || u.id !== meId);
+        const serverGroups = (groups.ok && Array.isArray(groups.data.groups) ? groups.data.groups : []).filter((g) => !g.me);
+        const nearby314 = (groups.ok && Array.isArray(groups.data.nearby) ? groups.data.nearby : []).filter((g) => !g.me).map((g) => Object.assign({}, g, { nearby: true }));
+        scope.sheet.groups = serverGroups.concat(nearby314);
         scope.sheet.loading = false;
         draw();
       }
@@ -3284,6 +3291,14 @@ LL.views = {};
           await loadList(true);
         } catch (err) {
           s.sending = false;
+          // Bundle 314 (1b): this chat already has an open request - open it.
+          const d314 = err && err.data;
+          if (d314 && d314.code === 'already_asked' && d314.open_id) {
+            ctx.toast(err.message, 'error');
+            scope.sheet = null;
+            openViewer(d314.open_id);
+            return;
+          }
           ctx.toast(err.message || 'Could not send the request', 'error');
           draw();
         }

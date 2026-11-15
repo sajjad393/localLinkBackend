@@ -258,11 +258,20 @@ func (a *API) pickChat(in chatPickIn) (chatPick, string) {
 	case "group":
 		gid := strings.TrimSpace(in.GroupID)
 		var name string
-		if gid == "" || a.store.DB().QueryRow(`SELECT COALESCE(name,'') FROM groups WHERE id=?`, gid).Scan(&name) != nil {
+		devices := []string{}
+		if gid == "" {
+			return p, "group not found"
+		}
+		if a.store.DB().QueryRow(`SELECT COALESCE(name,'') FROM groups WHERE id=?`, gid).Scan(&name) == nil {
+			devices = a.groupDevices(gid)
+		} else if n, d, ok := a.reportedGroup314(gid); ok {
+			// Bundle 314 (1c): a phone-only group a member reported.
+			name, devices = n, d
+		} else {
 			return p, "group not found"
 		}
 		p.ref = chatRef{Kind: "group", GroupID: gid}
-		for _, d := range a.groupDevices(gid) {
+		for _, d := range devices {
 			u, _ := a.deviceUser(d)
 			p.targets = append(p.targets, adminActionTarget{Device: d, User: u})
 		}
@@ -338,6 +347,16 @@ func (a *API) AdminChatRequestCreate(w http.ResponseWriter, r *http.Request) {
 	from, to, words, ok := chatRange(in, time.Now())
 	if !ok {
 		writeError(w, http.StatusBadRequest, "pick a valid date range")
+		return
+	}
+	// Bundle 314 (1): a chat the Owner is in is already on the Owner's phone.
+	if a.ownChat314(admin, pick) {
+		writeRefused314(w, ownChatCode314, ownChatText314, nil)
+		return
+	}
+	// Bundle 314 (1b): one open request per chat, whatever the range.
+	if open := a.openRequest314(pick.ref); open != "" {
+		writeRefused314(w, alreadyAskedCode314, alreadyAskedText314, map[string]any{"open_id": open})
 		return
 	}
 	_, replyKey, err := a.answerBoxKey()

@@ -45,6 +45,10 @@ type AdminGroup struct {
 	OwnerID   string `json:"owner_id"`
 	CreatedAt string `json:"created_at"`
 	Members   int    `json:"members"`
+	// Bundle 314: the admin's own user is a member (the app and web hide
+	// it from Get chat); member phones for the Owner (offline Get chat).
+	Me      bool     `json:"me"`
+	Devices []string `json:"member_devices,omitempty"`
 }
 
 type AdminLog struct {
@@ -172,7 +176,8 @@ func (a *API) AdminDevices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) AdminGroups(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.requireAdminPermission(w, r, "read"); !ok {
+	admin, ok := a.requireAdminPermission(w, r, "read")
+	if !ok {
 		return
 	}
 	params, err := parsePageParams(r, "admin-groups")
@@ -210,10 +215,30 @@ func (a *API) AdminGroups(w http.ResponseWriter, r *http.Request) {
 	if hasMore {
 		out = out[:params.Limit]
 	}
+	// Bundle 314: `me` per group, member phones + reported nearby groups
+	// (first page) for the Owner.
+	ids := make([]string, 0, len(out))
+	for _, g := range out {
+		ids = append(ids, g.ID)
+	}
+	me := a.groupMe314(admin, ids)
+	var devices map[string][]string
+	if admin.Role == "owner" {
+		devices = a.groupDevicesMap314(ids)
+	}
+	for i := range out {
+		out[i].Me = me[out[i].ID]
+		out[i].Devices = devices[out[i].ID]
+	}
+	var nearby []AdminNearbyGroup
+	if admin.Role == "owner" && params.Cursor == nil {
+		nearby = a.nearbyGroups314(admin)
+	}
 	resp := struct {
-		Groups []AdminGroup `json:"groups"`
+		Groups []AdminGroup       `json:"groups"`
+		Nearby []AdminNearbyGroup `json:"nearby,omitempty"`
 		PageInfo
-	}{Groups: out}
+	}{Groups: out, Nearby: nearby}
 	resp.HasMore = hasMore
 	if hasMore && len(out) > 0 {
 		last := out[len(out)-1]

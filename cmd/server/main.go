@@ -131,6 +131,8 @@ func main() {
 	mux.HandleFunc("GET /api/v1/admin/privacy", api.AdminPrivacyPolicy)
 	mux.HandleFunc("GET /api/v1/admin/devices", api.AdminDevices)
 	mux.HandleFunc("GET /api/v1/admin/groups", api.AdminGroups)
+	// Bundle 314 (1c): member phones report their phone-only groups.
+	mux.HandleFunc("POST /api/v1/admin/group-notes", api.AdminGroupNotes)
 	// Conversation review is owner-only and audited; see admin_conversations.go.
 	mux.HandleFunc("GET /api/v1/admin/conversations", api.AdminConversations)
 	mux.HandleFunc("GET /api/v1/admin/conversation", api.AdminConversation)
