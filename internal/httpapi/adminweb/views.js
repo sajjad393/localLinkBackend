@@ -2542,6 +2542,10 @@ LL.views = {};
       const PLAY310 = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>';
       const PAUSE310 = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>';
       const DL310 = (n) => `<svg viewBox="0 0 24 24" width="${n}" height="${n}" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg>`;
+      // Bundle 321 (R9): the app's R4 icons (mic in the voice ring, block on a file that can't come, hourglass = next).
+      const MIC321 = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>';
+      const BLOCK321 = '<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9A7.902 7.902 0 0 1 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1A7.902 7.902 0 0 1 20 12c0 4.42-3.58 8-8 8z"/></svg>';
+      const WAIT321 = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M6 2v6h.01L6 8.01 10 12l-4 4 .01.01H6V22h12v-5.99h-.01L18 16l-4-4 4-3.99-.01-.01H18V2H6z"/></svg>';
       const FILE310 = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm4 18H6V4h7v5h5v11z"/></svg>';
       const WARN310 = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>';
       const UPD310 = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M21 10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-.1a6.875 6.875 0 0 0 0 9.79 7.02 7.02 0 0 0 9.88 0C18.32 15.65 19 14.08 19 12.1h2c0 1.98-.88 4.55-2.64 6.29-3.51 3.48-9.21 3.48-12.72 0-3.5-3.47-3.53-9.11-.02-12.58a8.987 8.987 0 0 1 12.65 0L21 3v7.12z"/></svg>';
@@ -2656,10 +2660,14 @@ LL.views = {};
         const st = step307(q);
         const n = names307(q);
         const f317 = st.k === 'ready' ? files317(q) : null;
-        const files = f317 && f317.wanted
-          ? (f317.active ? `<span class="mini307 b">Files ${f317.here}/${f317.wanted}</span>` : `<span class="mini307 g">Files \u2713</span>`) : '';
-        const tag = st.k === 'ready' ? `<span class="mini307 g">${CHECK307(11)}Ready</span>${files}`
-          : `<span class="mini307 m">${st.k === 'empty' ? 'No messages' : 'Cancelled'}</span>`;
+        // Bundle 321 (R9 = app R1): "Ready to read" only when every file is
+        // here (or there are none); files on the way = blue "Messages here ·
+        // 2 of 5 files coming"; files that can't come = grey "2 files not available".
+        let tag;
+        if (st.k !== 'ready') tag = `<span class="mini307 m">${st.k === 'empty' ? 'No messages' : 'Cancelled'}</span>`;
+        else if (f317 && f317.wanted && f317.active) tag = `<span class="mini307 b">Messages here \u00b7 ${f317.here} of ${f317.wanted} files coming</span>`;
+        else if (f317 && f317.gone) tag = `<span class="mini307 m">${f317.gone} file${f317.gone === 1 ? '' : 's'} not available</span>`;
+        else tag = `<span class="mini307 g">${CHECK307(11)}Ready to read</span>`;
         const day = dayLabel(q.made_at);
         const sub = [num(q.of) > 0 ? `${q.of} parts` : '', day].filter(Boolean).join(' \u00b7 ');
         const open = st.k === 'ready' && num(q.parts) > 0 ? ` data-conv221-open="${ui.esc(q.id)}" role="button" tabindex="0"` : '';
@@ -2968,6 +2976,76 @@ LL.views = {};
           ${f.gone ? `<div class="fs317g">${f.gone} not on ${from ? ui.esc(from) + "'s" : 'the'} phone any more</div>` : ''}</div>`;
       }
 
+      // Bundle 321 (R9 = the app's R4, mock messages_redesign_321.html): the
+      // files card on top of the chat - "2 of 5 files here", MB, from X's
+      // phone, one piece per file; green "All files here" when every file
+      // that can come is here. No Stop on the page (the Owner phone asks).
+      function viewFiles321() {
+        const v = scope.view || {};
+        const out = [];
+        const seen = {};
+        (Array.isArray(v.messages) ? v.messages : []).forEach((m) => (Array.isArray(m.attachments) ? m.attachments : []).forEach((a) => {
+          if (!a || !a.file_id || seen[a.file_id]) return;
+          seen[a.file_id] = 1;
+          out.push({ st: fileState317(a), size: num(a.size) });
+        }));
+        return out.filter((x) => x.st.k !== 'gone' && x.st.k !== 'gone60' && x.st.k !== 'big');
+      }
+      function fill321(st) {
+        if (st.k === 'here') return 1;
+        if (st.k === 'coming' && st.f && num(st.f.of) > 0) return Math.min(0.99, num(st.f.parts) / num(st.f.of));
+        return 0;
+      }
+      function filesCard321() {
+        const q = scope.viewReq || {};
+        if (step307(q).k !== 'ready') return '';
+        const can = viewFiles321();
+        if (!can.length) return '';
+        const here = can.filter((x) => x.st.k === 'here').length;
+        const total = can.reduce((t, x) => t + x.size, 0);
+        const got = can.reduce((t, x) => t + x.size * fill321(x.st), 0);
+        const from = fromPhone317();
+        const done = here === can.length;
+        const title = done ? '<b class="g">All files here</b>' : `<b><span>${here} of ${can.length}</span> files here</b>`;
+        const sub = (done ? [`${can.length} file${can.length === 1 ? '' : 's'}`, total ? mb299(total) : '']
+          : [total ? `${mb299(got)} of ${mb299(total)}` : '', from ? `from ${from}'s phone` : '']).filter(Boolean).join(' \u00b7 ');
+        const bar = can.length > 40
+          ? `<span class="fs317bar"><i style="width:${Math.round(100 * got / Math.max(1, total))}%"></i></span>`
+          : `<span class="pc321">${can.map((x) => `<i class="${x.st.k === 'here' ? 'd' : ''}"><u style="width:${Math.round(100 * fill321(x.st))}%"></u></i>`).join('')}</span>`;
+        return `<div class="tc321${done ? ' done' : ''}" data-files321><div class="tc321r"><span class="tc321i">${done ? CHECK307(18) : ui.icon('i-image')}</span>
+          <div class="tc321t">${title}<small>${ui.esc(sub)}</small></div></div>${bar}</div>`;
+      }
+
+      // Bundle 321 (R9 = app R4): a photo / video is a tile - coming / next =
+      // the small picture blurred + a ring + "Coming by itself" / "Next in
+      // line" + "from X's phone" under it; here = the picture + the time chip
+      // (click = the full photo / video); can't come = grey + the reason.
+      function tile321(a, st, f, isVideo, name, size, time) {
+        const word = isVideo ? 'video' : 'photo';
+        const chip = `${isVideo ? 'Video' : 'Photo'}${size ? ` \u00b7 ${size}` : ''}`;
+        const img = `<img class="th221" alt="${ui.esc(name)}" src="data:${a.thumb_type === 'image/png' ? 'image/png' : 'image/jpeg'};base64,${a.thumb}">`;
+        const k = a.file_gone ? 'gone60' : st.k;
+        const tag = `<span class="chip321">${isVideo ? PLAY310 : ui.icon('i-image')}${ui.esc(chip)}</span>`;
+        const tm = time ? `<span class="tm321">${time}</span>` : '';
+        if (k === 'here' || k === 'none') {
+          const open = f && partsDone(f)
+            ? `<button class="hit321" type="button" data-conv221-show="${ui.esc(f.id)}" data-image="${isVideo ? '' : '1'}" data-name="${ui.esc(name)}" aria-label="Show full ${word}${size ? ` \u00b7 ${ui.esc(size)}` : ''}"></button>` : '';
+          return `<div class="att221 ph310 t321 here">${img}${isVideo ? `${tag}<span class="play321">${PLAY310}</span>` : ''}${open}${tm}</div>`;
+        }
+        if (k === 'coming' || k === 'next') {
+          const pct = k === 'coming' && f && num(f.of) > 0 ? Math.min(100, Math.round(100 * num(f.parts) / num(f.of))) : 0;
+          const off = (113.1 * (1 - Math.max(0.08, pct / 100))).toFixed(1);
+          const ring = k === 'next' ? `<span class="ring321">${WAIT321}</span>`
+            : `<span class="ring321${pct ? '' : ' spin'}"><svg viewBox="0 0 42 42" width="48" height="48"><circle cx="21" cy="21" r="18" class="rb"/><circle cx="21" cy="21" r="18" class="rf" stroke-dasharray="113.1" stroke-dashoffset="${off}"/></svg>${pct ? `<b>${pct}%</b>` : (isVideo ? PLAY310 : ui.icon('i-image'))}</span>`;
+          const parts = k === 'coming' && f && num(f.parts) > 0 && num(f.of) > 0 ? `<small>${f.parts} / ${f.of} parts</small>` : '';
+          const from = fromPhone317();
+          return `<div class="t321wrap"><div class="att221 ph310 t321 wait">${img}${tag}<div class="mid321">${ring}<b>${k === 'next' ? 'Next in line' : 'Coming by itself'}</b>${parts}</div></div>
+            <div class="ft321"><span>${from ? `from ${ui.esc(from)}'s phone` : ''}</span>${time || ''}</div></div>`;
+        }
+        const why = k === 'gone60' ? 'File removed after 60 days \u00b7 thumbnail only' : fileWords317(st);
+        return `<div class="att221 ph310 t321 off">${img}<div class="mid321"><span class="blk321">${BLOCK321}</span><b>${ui.esc(why)}</b><small>${ui.esc(chip)}</small></div>${tm}</div>`;
+      }
+
       // Bundle 310 (V2): a voice note like the app's voice row - round button,
       // bars, length. Not on the PC yet (get) -> getting (ring) -> Ready (play)
       // -> playing (bars + dot move). Old phones send no bars: flat bars + size.
@@ -3003,8 +3081,9 @@ LL.views = {};
           const off = (113.1 * (1 - Math.max(0.08, pct / 100))).toFixed(1);
           const stop = !num(f.parts) && f.state === 'pending'
             ? `<button type="button" class="vx310" data-conv307-cancel="${ui.esc(f.id)}" aria-label="Stop getting the voice note">${ui.icon('i-close')}</button>` : '';
-          btn = `<span class="vbtn310 ring${pct ? '' : ' spin'}" title="${num(f.parts) ? `Coming ${f.parts} / ${f.of}` : 'Coming'}"><svg viewBox="0 0 42 42" width="42" height="42"><circle cx="21" cy="21" r="18" class="rb"/><circle cx="21" cy="21" r="18" class="rf" stroke-dasharray="113.1" stroke-dashoffset="${off}"/></svg>${stop}</span>`;
-          label = num(f.parts) ? `Coming ${f.parts} / ${f.of}` : fileWords317({ k: 'coming', f });
+          // Bundle 321 (R9 = app R4): the mic inside the ring, "Coming · 12 / 40".
+          btn = `<span class="vbtn310 ring${pct ? '' : ' spin'}" title="${num(f.parts) ? `Coming ${f.parts} / ${f.of}` : 'Coming'}"><svg viewBox="0 0 42 42" width="42" height="42"><circle cx="21" cy="21" r="18" class="rb"/><circle cx="21" cy="21" r="18" class="rf" stroke-dasharray="113.1" stroke-dashoffset="${off}"/></svg><span class="mic321">${MIC321}</span>${stop}</span>`;
+          label = num(f.parts) ? `Coming \u00b7 ${f.parts} / ${f.of}` : fileWords317({ k: 'coming', f });
         } else if (a.file_id) {
           // Bundle 317 (G6): no Get button - the Owner's phone brings it by itself.
           const st317 = fileState317(a);
@@ -3013,7 +3092,8 @@ LL.views = {};
         } else {
           btn = `<span class="vbtn310 off">${PLAY310}</span>`;
         }
-        return `<div class="vo310${flat ? ' flat' : ''}" data-vo310="${f ? ui.esc(f.id) : ''}">${btn}<div class="vcol310">${bars310(levels, 150, played, flat)}<div class="vlab310">${ui.esc(label)}</div></div></div>`;
+        const coming321 = !!f && !partsDone(f) && !a.file_gone;
+        return `<div class="vo310${flat ? ' flat' : ''}${coming321 ? ' c321' : ''}" data-vo310="${f ? ui.esc(f.id) : ''}">${btn}<div class="vcol310">${bars310(levels, 150, played, flat)}<div class="vlab310">${ui.esc(label)}</div></div></div>`;
       }
 
       // V2: play the voice note on this PC (the bytes come with the login header).
@@ -3090,6 +3170,7 @@ LL.views = {};
         const st317 = a.file_id ? fileState317(a) : { k: 'none' };
         const f = st317.f || null;
         const wait = st317.k === 'here' || st317.k === 'none' ? '' : fileWords317(st317);
+        if (hasThumb && (isImage || isVideo)) return tile321(a, st317, f, isVideo, name, size, onPhoto);
         if (hasThumb) {
           // Photo / video picture: the action sits on the picture like the app.
           const img = `<img class="th221" alt="${ui.esc(name)}" src="data:${a.thumb_type === 'image/png' ? 'image/png' : 'image/jpeg'};base64,${a.thumb}">`;
@@ -3265,7 +3346,8 @@ LL.views = {};
           : `<div class="empty216">${num(v.parts) ? 'This part has no messages in the dates.' : 'No phone has answered yet.'}</div>`;
         // Bundle 307 (D5): faces + names, "Full chat \u00b7 from X's phone \u00b7 26 parts", Ready tag, Download, Delete copy.
         const n307 = names307(q.label ? q : { label: title, chat: v.chat });
-        const ready307 = v.complete || (num(v.of) > 0 && num(v.parts) >= num(v.of));
+        // Bundle 321 (R9): "Ready" only when the messages AND every file that can come are here.
+        const ready307 = (v.complete || (num(v.of) > 0 && num(v.parts) >= num(v.of))) && viewFiles321().every((x) => x.st.k === 'here');
         const sub307 = [rangeText(v.from || q.from, v.to || q.to), v.from_name ? `from ${v.from_name}'s phone` : '', num(v.of) ? `${v.of} parts` : ''].filter(Boolean).join(' \u00b7 ');
         return `<div class="vhead221 wvh307">
             <button class="iconbtn221" type="button" data-conv221-back aria-label="Back">${ui.icon('i-chevron-left')}</button>
@@ -3277,7 +3359,7 @@ LL.views = {};
             <span class="topwrap221"><button class="iconbtn221 boxed" type="button" data-conv221-top aria-label="More"><span class="kebab221 on"><i></i><i></i><i></i></span></button>${top}</span>
           </div>
           <div class="viewer221 ${scope.del ? 'has-side' : ''}">
-            <div class="vmain221">${notes}${body}${progress221()}</div>
+            <div class="vmain221">${filesCard321()}${notes}${body}${progress221()}</div>
             ${scope.del ? `<div class="vside221">${deletePanel()}</div>` : ''}
           </div>`;
       }

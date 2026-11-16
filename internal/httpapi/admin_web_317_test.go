@@ -21,7 +21,8 @@ func TestAdminWebViewer317(t *testing.T) {
 	for _, want := range []string{
 		"function sysLines317(", "class=\"sys317\"", "Deleted ${ui.esc(delAt317(m.deleted_at, m.created_at))}", "seen317[key]",
 		"Too big to bring (over 50 MB)", "phone any more", "Next in line", "`Coming ${f.parts} / ${f.of}`",
-		"function files317(", "function filesStrip317(", "Files ${f317.here}/${f317.wanted}", "Files \\u2713",
+		// Bundle 321 (R9 = app R1): the Finished rows say "Messages here · x of y files coming" / "Ready to read".
+		"function files317(", "function filesStrip317(", "Messages here \\u00b7 ${f317.here} of ${f317.wanted} files coming", "Ready to read",
 		"The chat is on the way",
 	} {
 		if !strings.Contains(views, want) {

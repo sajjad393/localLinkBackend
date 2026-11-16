@@ -1907,3 +1907,48 @@ button.chip307 { cursor: pointer; }
 .fs317bar i { display: block; height: 100%; background: var(--k-blueT); transition: width .4s; }
 .fs317.done .fs317bar i { background: var(--k-ok); }
 .fs317g { font-size: 12px; color: var(--k-grey); }
+
+/* Bundle 321 (R9 = the app's R4 redesign, mock messages_redesign_321.html):
+   files card on top, photo / video tiles, the mic in the voice ring. */
+.tc321 { margin: 0 0 12px; padding: 12px 14px; border-radius: 16px; background: var(--k-card, var(--surface)); border: 1px solid var(--k-line, var(--k-track)); display: flex; flex-direction: column; gap: 10px; }
+.tc321r { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.tc321i { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; flex: none; color: var(--k-blueT); background: color-mix(in srgb, var(--k-blueT) 14%, transparent); }
+.tc321i svg { width: 18px; height: 18px; fill: currentColor; }
+.tc321.done .tc321i { color: var(--k-ok); background: color-mix(in srgb, var(--k-ok) 14%, transparent); }
+.tc321t { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.tc321t b { font-size: 15px; font-weight: 600; } .tc321t b span { color: var(--k-blueT); } .tc321t b.g { color: var(--k-ok); }
+.tc321t small { font-size: 12px; color: var(--k-grey); }
+.pc321 { display: flex; gap: 4px; }
+.pc321 i { flex: 1; height: 5px; border-radius: 3px; background: var(--k-track); overflow: hidden; display: block; }
+.pc321 i u { display: block; height: 100%; background: var(--k-blueT); transition: width .4s; }
+.pc321 i.d u { background: var(--k-ok); }
+.t321wrap { display: flex; flex-direction: column; gap: 4px; }
+.t321 { width: 236px; height: 150px; border-radius: 14px; }
+.t321 .th221 { width: 236px; height: 150px; object-fit: cover; border-radius: 14px; }
+.t321.wait .th221 { filter: blur(6px) brightness(.85); transform: scale(1.08); }
+.t321.off .th221 { filter: grayscale(1) blur(3px) brightness(.6); transform: scale(1.06); }
+.t321.wait::after, .t321.off::after { content: ""; position: absolute; inset: 0; background: rgba(0, 0, 0, .2); }
+.t321.off::after { background: rgba(0, 0, 0, .35); }
+.mid321 { position: absolute; inset: 30px 12px 26px; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #fff; text-align: center; text-shadow: 0 1px 4px rgba(0, 0, 0, .55); }
+.mid321 b { font-size: 13px; font-weight: 600; line-height: 1.25; }
+.mid321 small { font-size: 12px; opacity: .92; }
+.ring321 { position: relative; width: 48px; height: 48px; flex: none; border-radius: 50%; background: rgba(0, 0, 0, .4); display: grid; place-items: center; margin-bottom: 4px; }
+.ring321 > svg { position: absolute; inset: 0; }
+.ring321 .rb { fill: none; stroke: rgba(255, 255, 255, .25); stroke-width: 3; }
+.ring321 .rf { fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; transform: rotate(-90deg); transform-origin: center; transition: stroke-dashoffset .4s; }
+.ring321.spin > svg { animation: spin310 1.1s linear infinite; }
+.ring321 b { font-size: 13px; position: relative; }
+.ring321 > svg + svg, .ring321 > svg:only-child { position: relative; width: 22px; height: 22px; fill: #fff; color: #fff; }
+.blk321 { flex: none; width: 40px; height: 40px; border-radius: 50%; background: rgba(0, 0, 0, .5); display: grid; place-items: center; margin-bottom: 4px; }
+.chip321 { position: absolute; left: 8px; top: 8px; z-index: 1; display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 8px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 11px; font-weight: 600; }
+.chip321 svg { width: 13px; height: 13px; fill: currentColor; }
+.tm321 { position: absolute; right: 8px; bottom: 8px; z-index: 2; padding: 3px 7px; border-radius: 8px; background: rgba(0, 0, 0, .55); }
+.tm321 .ft310 { float: none; margin: 0; color: #fff; font-weight: 600; }
+.play321 { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 48px; height: 48px; border-radius: 50%; background: rgba(0, 0, 0, .6); color: #fff; display: grid; place-items: center; }
+.hit321 { position: absolute; inset: 0; z-index: 1; border: 0; padding: 0; background: transparent; cursor: pointer; border-radius: 14px; }
+.hit321:focus-visible { outline: 2px solid var(--a-pri); outline-offset: 2px; }
+.ft321 { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 0 4px; font-size: 12px; color: var(--k-grey); }
+.ft321 .ft310 { float: none; margin: 0; }
+.vo310.c321 .vlab310 { color: var(--a-pri); font-weight: 600; }
+.mic321 { position: relative; display: grid; place-items: center; color: var(--a-pri); }
+.fr-s .mini307.b, .fr-s .mini307.m { white-space: normal; }
