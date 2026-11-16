@@ -225,6 +225,20 @@ type chatPickIn struct {
 	To      string   `json:"to"`
 	Scope   string   `json:"scope"` // purge: message | full | range
 	IDs     []string `json:"ids"`
+	// Bundle 318 (K4): "Get new messages only" from the Owner phone (it
+	// keeps a copy): only messages from Since on. The web never sends it.
+	Since  string `json:"since"`   // RFC 3339
+	SinceN int    `json:"since_n"` // messages of the copy from Since on
+	SinceH string `json:"since_h"` // their check (16 hex)
+}
+
+// since318 is the new-only part of a Get chat detail (nil = full request).
+func since318(in chatPickIn) map[string]any {
+	t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(in.Since))
+	if err != nil || in.SinceN < 0 || len(in.SinceH) > 64 {
+		return nil
+	}
+	return map[string]any{"since": t.UTC().Format(time.RFC3339Nano), "since_n": in.SinceN, "since_h": in.SinceH}
 }
 
 type chatPick struct {
@@ -365,6 +379,9 @@ func (a *API) AdminChatRequestCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	detail := map[string]any{"chat": pick.ref, "from": from, "to": to, "plus_day": true}
+	for k, v := range since318(in) { // Bundle 318 (K4)
+		detail[k] = v
+	}
 	for i := range pick.targets {
 		pick.targets[i].Detail = detail
 	}
@@ -679,6 +696,10 @@ type chatAnswerPlain struct {
 	Messages []map[string]any `json:"messages,omitempty"`
 	File     map[string]any   `json:"file,omitempty"`
 	Data     string           `json:"data,omitempty"`
+	// Bundle 318 (K5): a new-only answer (part 1).
+	Since    string         `json:"since,omitempty"`
+	Days     map[string]int `json:"days,omitempty"`
+	UpToDate bool           `json:"up_to_date,omitempty"`
 }
 
 func gunzipLimit(b []byte, limit int64) ([]byte, error) {
@@ -807,6 +828,9 @@ func (a *API) AdminChatRequestAnswer(w http.ResponseWriter, r *http.Request) {
 				resp["from"], resp["to"] = p.From, p.To
 			}
 			resp["trimmed"] = p.Trimmed
+			if p.Since != "" { // Bundle 318 (K5)
+				resp["since"], resp["days"], resp["up_to_date"] = p.Since, p.Days, p.UpToDate
+			}
 		}
 		if p.File != nil {
 			fileMeta = p.File
