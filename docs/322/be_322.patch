@@ -1,0 +1,767 @@
+diff --git a/internal/httpapi/admin_web_322_test.go b/internal/httpapi/admin_web_322_test.go
+new file mode 100644
+index 0000000..1332b94
+--- /dev/null
++++ b/internal/httpapi/admin_web_322_test.go
+@@ -0,0 +1,66 @@
++package httpapi
++
++// Bundle 322 (W4/W5): the App version page runs in node (the real views.js)
++// and the panel's CSS keeps the phone-width rules that W5 fixed.
++
++import (
++	"os"
++	"os/exec"
++	"strings"
++	"testing"
++)
++
++// readFile322 is the same read the other web tests use (no embed needed).
++func readFile322(t *testing.T, name string) []byte {
++	t.Helper()
++	raw, err := os.ReadFile(name)
++	if err != nil {
++		t.Fatalf("%s: %v", name, err)
++	}
++	return raw
++}
++
++func TestAdminWebSmoke322(t *testing.T) {
++	node, err := exec.LookPath("node")
++	if err != nil {
++		t.Skip("node not installed")
++	}
++	out, runErr := exec.Command(node, "testdata/appversion_322_smoke.js", "adminweb/views.js").CombinedOutput()
++	if runErr != nil || !strings.Contains(string(out), "SMOKE_OK") {
++		t.Fatalf("smoke 322 failed: %v\n%s", runErr, out)
++	}
++	if !strings.Contains(string(out), "6 server states") {
++		t.Fatalf("expected 6 states in the smoke: %s", out)
++	}
++}
++
++// The three max-content traps W5 found: a grid that sizes to its widest
++// child pushed the whole panel sideways at 390 px.
++func TestAdminWebCSS322NoMaxContentTrap(t *testing.T) {
++	css := string(readFile322(t, "adminweb/styles.css"))
++	for _, want := range []string{
++		".content-inner { grid-template-columns: minmax(0, 1fr); }",
++		".section { display: grid; gap: var(--space-lg); grid-template-columns: minmax(0, 1fr); }",
++		".field { display: grid; gap: var(--space-xs); grid-template-columns: minmax(0, 1fr); }",
++	} {
++		if !strings.Contains(css, want) {
++			t.Fatalf("styles.css must contain %q", want)
++		}
++	}
++}
++
++// The page must never put a whole sentence inside a nowrap badge.
++func TestAdminWeb322StateLineWraps(t *testing.T) {
++	views := string(readFile322(t, "adminweb/views.js"))
++	if !strings.Contains(views, "data-version-state") {
++		t.Fatal("the state line must have its own wrapping element")
++	}
++	if strings.Contains(views, "ui.badge(stateText") {
++		t.Fatal("the state sentence must not be a badge (badge is nowrap)")
++	}
++	// The page asks the server to verify the build exists (V5).
++	app := string(readFile322(t, "adminweb/app.js"))
++	if !strings.Contains(app, "require_upload322") {
++		t.Fatal("app.js must send require_upload322 when the build came from an upload")
++	}
++}
+diff --git a/internal/httpapi/adminweb/app.js b/internal/httpapi/adminweb/app.js
+index a1efc83..4d596cc 100644
+--- a/internal/httpapi/adminweb/app.js
++++ b/internal/httpapi/adminweb/app.js
+@@ -1227,13 +1227,18 @@
+     if (!form) return;
+     event.preventDefault();
+     const when = (form.querySelector('[name="when"]:checked') || {}).value || 'warn';
+-    saveVersionRule({
++    const body = {
+       min_version: form.querySelector('[name="min_version"]').value.trim(),
+       min_build: Number(form.querySelector('[name="min_build"]').value),
+       mode: when === 'warn' ? 'warn' : 'stop',
+       stop_days: when === 'days' ? Number(form.querySelector('[name="stop_days"]').value) : 0,
+       very_old: form.querySelector('[name="very_old"]').checked,
+-    }, form.querySelector('[data-version-note]'));
++    };
++    // Bundle 322 (V5): this page filled the build from a real upload, so the
++    // server must have that build (no rule for a build nobody can get).
++    // Typed by hand (no APK on the server) is accepted exactly as in 321.
++    if (form.getAttribute('data-readonly') === '1') body.require_upload322 = true;
++    saveVersionRule(body, form.querySelector('[data-version-note]'));
+   });
+   document.addEventListener('click', (event) => {
+     const btn = event.target.closest('[data-version-remove]');
+diff --git a/internal/httpapi/adminweb/styles.css b/internal/httpapi/adminweb/styles.css
+index cf169ec..909d60e 100644
+--- a/internal/httpapi/adminweb/styles.css
++++ b/internal/httpapi/adminweb/styles.css
+@@ -260,7 +260,7 @@ a:hover { text-decoration: underline; }
+   background: linear-gradient(140deg, var(--primary), var(--info));
+   display: grid; place-items: center; color: #fff;
+ }
+-.field { display: grid; gap: var(--space-xs); }
++.field { display: grid; gap: var(--space-xs); grid-template-columns: minmax(0, 1fr); } /* 322 W5: a wide child (upload card, table) must not widen the form */
+ .field > label { font-weight: 600; font-size: 12.5px; color: var(--text-secondary); }
+ .input {
+   height: 40px;
+@@ -476,6 +476,12 @@ select.input { height: 34px; }
+ 
+ .content { padding: var(--space-page); flex: 1; min-width: 0; }
+ .content-inner { max-width: var(--content-max); margin: 0 auto; display: grid; gap: var(--space-xxl); }
++/* Bundle 322 (W5/L2): a phone-width page must never scroll sideways.
++   .content-inner is a grid, so its implicit column is max-content: ONE wide
++   child (the Phones-by-build table) pushed the whole page to 792 px at a
++   390 px window. minmax(0,1fr) lets the column shrink; the table then
++   scrolls inside its own .table-wrap (overflow-x:auto), as the mock does. */
++.content-inner { grid-template-columns: minmax(0, 1fr); }
+ .drawer-scrim { position: fixed; inset: 0; background: rgba(8, 12, 20, 0.45); z-index: 25; }
+ 
+ /* --------------------------------------------------------------------------
+@@ -501,7 +507,7 @@ select.input { height: 34px; }
+ .panel-head .sub { font-size: 12px; color: var(--text-secondary); }
+ .panel-actions { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
+ 
+-.section { display: grid; gap: var(--space-lg); }
++.section { display: grid; gap: var(--space-lg); grid-template-columns: minmax(0, 1fr); } /* 322 W5: same max-content trap one level down */
+ .section-head { display: flex; align-items: flex-start; gap: var(--space-md); }
+ .section-head .grow { display: grid; gap: 2px; }
+ .section-head h2 { font-size: 16px; }
+diff --git a/internal/httpapi/adminweb/views.js b/internal/httpapi/adminweb/views.js
+index b3ccd4e..79eec26 100644
+--- a/internal/httpapi/adminweb/views.js
++++ b/internal/httpapi/adminweb/views.js
+@@ -3921,6 +3921,10 @@ LL.views = {};
+ 
+   // -------------------------------------------------------------- app version
+   // Bundle 213: minimum app version (warn / stop old builds).
++  // Bundle 322 (W4 / V2-V4, V6): the build is picked from what is really on
++  // this server. The approved shape is mocks/n322/admin_web_appversion_322.html
++  // (PASS 84/84 with tools/ui_overlap_test_web.py). Only classes that already
++  // exist in styles.css are used.
+   const appversion = {
+     id: 'appversion',
+     title: 'App version',
+@@ -3935,41 +3939,185 @@ LL.views = {};
+       const data = result.data || {};
+       const rule = data.rule;
+       const builds = Array.isArray(data.builds) ? data.builds : [];
+-      const ruleText = rule
+-        ? `Below build ${ui.esc(rule.min_build)} (${ui.esc(rule.min_version)}): ${rule.mode === 'warn' ? 'warn only' : 'stop from ' + ui.esc(rule.stop_at)}${rule.very_old ? ' · very old apps stopped' : ''} · by ${ui.esc(rule.by)}`
+-        : 'None set';
+-      // Bundle 217: ui.table so a phone shows each build as a card.
+-      const rows = builds.map((b) => [ui.esc(b.build), ui.esc(b.devices), ui.esc(b.last_seen)]);
++      // Bundle 322: newest first (the server already sorts by build DESC).
++      const uploads = Array.isArray(data.uploads) ? data.uploads : [];
++      const newest = uploads.length ? uploads[0] : null;
++      const ruleBuild = rule && rule.min_build ? num(rule.min_build) : 0;
++      // V2: the saved rule is preferred; with no rule the newest upload
++      // fills the two boxes. No upload at all -> the boxes stay editable
++      // exactly as in 321 (never a dead end).
++      const start = rule && rule.min_build ? rule : (newest || null);
++      const startName = start ? String(start.min_version || start.version || '') : '';
++      const startBuild = start ? num(start.min_build || start.build) : '';
++      const readOnly = !!newest;
++      // V6: the state line - green / amber / grey.
++      let stateTone = 'neutral';
++      let stateText = 'No APK on this server yet - type the version by hand or upload one in App download.';
++      if (newest && ruleBuild) {
++        if (ruleBuild === num(newest.build)) {
++          stateTone = 'success';
++          stateText = `The rule is the newest upload (${ui.esc(newest.version)} · build ${ui.esc(newest.build)}).`;
++        } else if (num(newest.build) > ruleBuild) {
++          stateTone = 'warning';
++          const behind = num(newest.phones_here) || 0;
++          stateText = `A newer upload is here (${ui.esc(newest.version)} · build ${ui.esc(newest.build)}), the rule is still build ${ruleBuild}.`
++            + (behind ? ` ${behind} phones are on the newest build already.` : '');
++        } else {
++          stateTone = 'neutral';
++          stateText = `The rule (build ${ruleBuild}) is newer than the newest upload here (build ${ui.esc(newest.build)}).`;
++        }
++      } else if (newest) {
++        stateTone = 'neutral';
++        stateText = `No rule yet. The newest upload is ${ui.esc(newest.version)} · build ${ui.esc(newest.build)} - tap "Use this build".`;
++      }
++      const ruleStats = rule
++        ? ui.statRow([
++            { label: 'Minimum build', value: String(rule.min_build) },
++            { label: 'Minimum version', value: String(rule.min_version) },
++            { label: 'What happens', value: rule.mode === 'warn' ? 'Warn only' : `Stop from ${rule.stop_at}` },
++            { label: 'Set by', value: String(rule.by || '') },
++          ])
++        : `<p data-version-current>No minimum version is set - every build may use the app.</p>`;
++
++      const newestCard = newest
++        ? `<div class="apk299-up" data-version-newest>
++            <div class="grow" style="min-width:0">
++              <div class="row gap-sm" style="flex-wrap:wrap">
++                <b>${ui.esc(newest.file_name || 'APK')}</b>
++                ${ui.badge(`build ${newest.build}`, 'primary', { dot: true })}
++                ${num(newest.build) === ruleBuild ? ui.badge('this is the rule', 'success') : ui.badge('not the rule yet', 'neutral')}
++              </div>
++              <div class="type-caption" style="margin-top:4px">${ui.esc(newest.version)} · ${mb299(newest.size)} · uploaded ${ui.esc(when299(newest.added_at))} by ${ui.esc(newest.added_by || 'owner')}</div>
++              <div class="apk299-stats">
++                ${ui.badge(newest.on_disk ? 'file on the server' : 'file missing', newest.on_disk ? 'success' : 'danger')}
++                ${ui.badge(`${num(newest.phones_here) || 0} phones on this build`, 'neutral')}
++                ${ui.badge(`${num(newest.downloads) || 0} downloads`, 'neutral')}
++              </div>
++            </div>
++          </div>`
++        : `<div class="apk299-none"><p class="type-caption">Nothing uploaded yet. The fields below stay editable so a rule can still be set by hand.</p></div>`;
++
++      const pickRow = uploads.length
++        ? `<div class="row gap-sm" style="margin-top:10px;flex-wrap:wrap">
++             <button class="btn btn-sm btn-primary" type="button" data-version-use-newest>Use this build</button>
++             ${uploads.length > 1 ? `<button class="btn btn-sm" type="button" data-version-pick>Pick another upload… (${uploads.length - 1} older)</button>` : ''}
++             <button class="btn btn-sm" type="button" data-nav="apkdownload">Upload a new APK</button>
++           </div>`
++        : `<div class="row gap-sm" style="margin-top:10px;flex-wrap:wrap">
++             <button class="btn btn-sm" type="button" data-nav="apkdownload">Upload a new APK</button>
++           </div>`;
++
++      // V2/V3: read-only boxes filled from the picked build; "Use this build"
++      // fills them from the newest upload. Save stays a tap.
++      const nameAttrs = readOnly ? 'readonly' : '';
++      const buildAttrs = readOnly ? 'readonly' : 'type="number" min="1"';
++      const tableRows = builds.map((b) => {
++        const n = num(b.build);
++        const pills = [
++          n === ruleBuild ? ui.badge('rule', 'primary') : '',
++          newest && n === num(newest.build) ? ui.badge('newest upload', 'info') : '',
++        ].filter(Boolean).join(' ');
++        return [ui.esc(b.build), ui.esc(b.devices), ui.esc(b.last_seen), pills];
++      });
++      const pickList = uploads.map((u, i) => `
++        <button class="auth-note" type="button" data-version-use="${ui.esc(u.build)}" style="display:flex;gap:10px;align-items:center;width:100%;text-align:left;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-muted);margin-bottom:8px;min-width:0">
++          <span class="grow" style="min-width:0">
++            <b style="display:block">${ui.esc(u.version)} · build ${ui.esc(u.build)}</b>
++            <span class="type-caption">${ui.esc(when299(u.added_at))} · ${mb299(u.size)}${i === 0 ? ' · newest' : ''}${num(u.build) === ruleBuild ? ' · this is the rule' : ''}</span>
++          </span>
++          ${ui.badge(u.on_disk ? 'on server' : 'file missing', u.on_disk ? 'success' : 'danger')}
++        </button>`).join('');
++
+       el.innerHTML = `
+         <div class="section">
+           ${ui.sectionHead({ title: 'App version', subtitle: 'Old phones get a warning, then can only read chats until they update', icon: 'i-devices' })}
+-          ${ui.panel({ title: 'Current rule', subtitle: 'Signed by the server; phones pass it on with no internet', body: `<p data-version-current>${ruleText}</p>` })}
++          ${ui.panel({ title: 'Current rule', subtitle: 'Signed by the server; phones pass it on with no internet', body: ruleStats })}
+           ${ui.panel({
+             title: 'Minimum version', subtitle: 'Phones below it are warned or stopped',
+-            body: `<form class="stack gap-lg" data-version-form style="max-width:520px">
+-              <div class="field"><label for="ver-name">Version name (e.g. 3.0.54)</label>
+-                <input class="input" id="ver-name" name="min_version" value="${ui.esc(rule ? rule.min_version : '')}"></div>
+-              <div class="field"><label for="ver-build">Build number (e.g. 125)</label>
+-                <input class="input" id="ver-build" name="min_build" type="number" min="1" value="${ui.esc(rule ? rule.min_build : '')}"></div>
+-              <div class="field"><label>What happens</label>
+-                <label><input type="radio" name="when" value="warn"> Warn only</label>
+-                <label><input type="radio" name="when" value="now"> Stop now</label>
+-                <label><input type="radio" name="when" value="days" checked> Stop after
+-                  <input class="input" name="stop_days" type="number" min="1" max="30" value="3" style="width:80px;display:inline-block"> days</label></div>
+-              <label><input type="checkbox" name="very_old"> Also stop very old apps (before 3.0.54)</label>
+-              <div class="row gap-md">
++            body: `<form class="stack gap-lg" data-version-form data-readonly="${readOnly ? '1' : '0'}" novalidate>
++              <div class="field">
++                <label>Newest upload on this server</label>
++                ${newestCard}
++                ${pickRow}
++                <div class="row gap-sm" style="margin-top:10px;align-items:flex-start;min-width:0">
++                  <span class="dot" style="margin-top:6px;flex:none;width:8px;height:8px;border-radius:50%;background:var(--${stateTone === 'success' ? 'success' : stateTone === 'warning' ? 'warning' : 'text-tertiary'})"></span>
++                  <span class="type-caption" style="min-width:0;overflow-wrap:break-word" data-version-state>${stateText}</span>
++                </div>
++              </div>
++              <div class="grid grid-2">
++                <div class="field">
++                  <label for="ver-name">Version name</label>
++                  <input class="input" id="ver-name" name="min_version" value="${ui.esc(startName)}" ${nameAttrs}>
++                  <div class="type-caption" style="margin-top:4px">${readOnly ? 'Read from the APK at upload - not typed any more.' : 'Type it by hand (no APK on this server yet).'}</div>
++                </div>
++                <div class="field">
++                  <label for="ver-build">Build number</label>
++                  <input class="input" id="ver-build" name="min_build" value="${ui.esc(startBuild)}" ${buildAttrs}>
++                  <div class="type-caption" style="margin-top:4px">${readOnly ? 'versionCode from the APK on this server.' : 'The build you want to warn or stop below.'}</div>
++                </div>
++              </div>
++              <div class="field">
++                <label>What happens</label>
++                <label><input type="radio" name="when" value="warn" ${rule && rule.mode === 'warn' ? 'checked' : ''}> Warn only</label>
++                <label><input type="radio" name="when" value="now" ${rule && rule.mode !== 'warn' && !start ? 'checked' : ''}> Stop now</label>
++                <label><input type="radio" name="when" value="days" ${!rule ? 'checked' : rule.mode !== 'warn' ? 'checked' : ''}> Stop after
++                  <input class="input" name="stop_days" type="number" min="0" max="30" value="3" style="width:80px;display:inline-block"> days</label>
++              </div>
++              <label><input type="checkbox" name="very_old" ${rule && rule.very_old ? 'checked' : ''}> Also stop very old apps (before 3.0.54)</label>
++              <div class="row gap-md" style="flex-wrap:wrap">
+                 <button class="btn btn-primary" type="submit">Save rule</button>
+                 <button class="btn" type="button" data-version-remove>Remove rule</button>
+                 <span class="type-caption" data-version-note></span>
+               </div>
++              <div class="type-caption">Saving a rule can stop phones - it always takes this tap.</div>
+             </form>`,
+           })}
+-          ${ui.panel({ title: 'Phones by build', subtitle: 'Last 30 days', body: ui.table({ columns: [{ label: 'Build' }, { label: 'Phones' }, { label: 'Last seen' }], rows, emptyTitle: 'No builds yet', emptyMessage: 'No phone has sent its build yet (apps from 3.0.54 do).' }) })}
++          ${ui.panel({ title: 'Phones by build', subtitle: 'Last 30 days', body: ui.table({ columns: [{ label: 'Build' }, { label: 'Phones' }, { label: 'Last seen' }, { label: '' }], rows: tableRows, emptyTitle: 'No builds yet', emptyMessage: 'No phone has sent its build yet (apps from 3.0.54 do).' }) })}
+         </div>`;
++
++      // V3: "Use this build" (the newest upload) fills both boxes.
++      const useNewest = el.querySelector('[data-version-use-newest]');
++      if (useNewest && newest) {
++        useNewest.addEventListener('click', () => {
++          el.querySelector('[name="min_version"]').value = String(newest.version || '');
++          el.querySelector('[name="min_build"]').value = String(newest.build || '');
++        });
++      }
++      // V4: the pick sheet - newest first, keyboard (Esc) closes it.
++      const pickBtn = el.querySelector('[data-version-pick]');
++      if (pickBtn) {
++        pickBtn.addEventListener('click', () => {
++          const host = document.getElementById('modal-host');
++          host.innerHTML = `<div class="modal-scrim" role="dialog" aria-modal="true" aria-label="Pick another upload">
++            <div class="modal" style="width:min(560px,100%)">
++              <div class="pop-head">
++                <div class="grow"><h2>Pick another upload</h2><span class="type-caption">The APKs on this server, newest first</span></div>
++                <button class="btn btn-icon" data-modal="close" aria-label="Close">${ui.icon('i-close')}</button>
++              </div>
++              <div>${pickList}</div>
++            </div>
++          </div>`;
++          const close = () => { host.innerHTML = ''; document.removeEventListener('keydown', onKey); };
++          const onKey = (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); close(); } };
++          document.addEventListener('keydown', onKey);
++          host.querySelector('[data-modal="close"]').addEventListener('click', close);
++          host.querySelector('.modal-scrim').addEventListener('click', (ev) => { if (ev.target.classList.contains('modal-scrim')) close(); });
++          host.querySelectorAll('[data-version-use]').forEach((b) => b.addEventListener('click', () => {
++            const u = uploads.find((x) => String(x.build) === b.getAttribute('data-version-use'));
++            if (!u) return;
++            const nameEl = el.querySelector('[name="min_version"]');
++            const buildEl = el.querySelector('[name="min_build"]');
++            if (nameEl) nameEl.value = String(u.version || '');
++            if (buildEl) buildEl.value = String(u.build || '');
++            const note = el.querySelector('[data-version-note]');
++            if (note) note.textContent = `Picked ${u.version} · build ${u.build}. Tap "Save rule" to apply it.`;
++            close();
++          }));
++        });
++      }
+     },
+   };
+ 
+-
+   // ------------------------------------------------------------ app download
+   // Bundle 299 (A): the owner puts the LinkUp APK on the server. Everyone on
+   // the server's Wi-Fi opens http://<server>:8080/linkup and taps Download;
+diff --git a/internal/httpapi/testdata/appversion_322_smoke.js b/internal/httpapi/testdata/appversion_322_smoke.js
+new file mode 100644
+index 0000000..7675cb4
+--- /dev/null
++++ b/internal/httpapi/testdata/appversion_322_smoke.js
+@@ -0,0 +1,118 @@
++// Bundle 322 (W4): runs the REAL App version mount code (adminweb/views.js)
++// in node with six fake server answers and checks the words the owner sees.
++// Regression: the 321 form (Save rule / Remove rule / very old) stays.
++const fs = require('fs');
++const path = process.argv[2] || 'internal/httpapi/adminweb/views.js';
++const src = fs.readFileSync(path, 'utf8');
++
++// --- a tiny DOM: only what the view touches (innerHTML + querySelector) ----
++function el(tag) {
++  return {
++    tagName: (tag || 'div').toUpperCase(),
++    _html: '',
++    get innerHTML() { return this._html; },
++    set innerHTML(v) { this._html = String(v); },
++    textContent: '',
++    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
++    style: {},
++    getAttribute() { return null; },
++    setAttribute() {},
++    addEventListener() {},
++    querySelector() { return null; },
++    querySelectorAll() { return []; },
++    appendChild() {},
++  };
++}
++global.document = {
++  documentElement: { dataset: {} },
++  body: el('body'),
++  head: el('head'),
++  createElement: el,
++  getElementById: () => el('div'),
++  querySelector: () => null,
++  querySelectorAll: () => [],
++  addEventListener() {},
++};
++global.window = global;
++global.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
++global.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
++global.requestAnimationFrame = (f) => setTimeout(f, 0);
++global.L = { t: {} };
++
++// --- load the real modules ------------------------------------------------
++eval(fs.readFileSync(path.replace('views.js', 'components.js'), 'utf8'));
++eval(src);
++if (!LL.views || !LL.views.appversion) throw new Error('appversion view missing');
++
++// --- fake server answers -------------------------------------------------
++function up(b, v, opts) {
++  const o = opts || {};
++  return { id: b, version: v, build: b, file_name: 'LinkUp-' + v + '.apk', size: 18_400_000,
++    sha256: 'a'.repeat(64), added_at: '2026-11-16T11:20:00Z', added_by: 'sajjad',
++    downloads: o.dl || 4, current: !!o.newest, is_rule: !!o.rule, on_disk: o.disk !== false,
++    phones_here: o.phones || 3, newest: !!o.newest };
++}
++const rule = (b, v, mode) => ({ min_build: b, min_version: v, mode: mode || 'warn',
++  stop_at: '2026-11-20T11:20:00Z', very_old: false, seq: 9, at: '2026-11-17T09:00:00Z',
++  by: 'sajjad', signer: 'server' });
++
++const CASES = {
++  newest_behind_rule: {
++    rule: rule(183, '3.0.112'),
++    uploads: [up(185, '3.0.114', { newest: true, phones: 3 }), up(184, '3.0.113'), up(183, '3.0.112', { rule: true })],
++    builds: [{ build: 185, devices: 3, last_seen: '2026-11-17T07:40:00Z' }],
++    want: ['Use this build', 'Pick another upload', 'the rule is still build 183', 'value="3.0.112"', 'value="183"', 'readonly'],
++  },
++  rule_is_newest: {
++    rule: rule(185, '3.0.114'),
++    uploads: [up(185, '3.0.114', { newest: true, rule: true })],
++    builds: [{ build: 185, devices: 9, last_seen: '2026-11-17T07:40:00Z' }],
++    want: ['The rule is the newest upload', 'value="3.0.114"', 'readonly'],
++    notWant: ['Pick another upload'],
++  },
++  no_upload: {
++    rule: null, uploads: [], builds: [],
++    want: ['No APK on this server yet', 'Type it by hand', 'Save rule', 'Remove rule'],
++    notWant: ['value="3.0.112" readonly', 'Use this build'],
++  },
++  rule_typed_by_hand: {
++    rule: rule(150, '3.0.90'), uploads: [], builds: [{ build: 150, devices: 2, last_seen: '2026-11-17T07:40:00Z' }],
++    want: ['No APK on this server yet', 'value="3.0.90"', 'value="150"'],
++    notWant: ['value="3.0.90" readonly'],
++  },
++  file_missing: {
++    rule: rule(184, '3.0.113'),
++    uploads: [up(184, '3.0.113', { newest: true, rule: true, disk: false })],
++    builds: [],
++    want: ['file missing'],
++  },
++  empty_uploads_key: { // an old app build of the API without the new keys
++    rule: rule(183, '3.0.112'), uploads: undefined, builds: [],
++    want: ['No APK on this server yet', 'value="3.0.112"'],
++  },
++};
++
++(async () => {
++  const report = [];
++  for (const [name, c] of Object.entries(CASES)) {
++    const host = el('div');
++    const data = { rule: c.rule, builds: c.builds };
++    if (c.uploads !== undefined) {
++      data.uploads = c.uploads;
++      data.newest_upload = c.uploads.length ? c.uploads[0] : null;
++    }
++    await LL.views.appversion.mount(host, { api: async () => data });
++    const html = host.innerHTML;
++    for (const w of c.want) if (html.indexOf(w) < 0) report.push(`${name}: missing ${JSON.stringify(w)}`);
++    for (const w of c.notWant || []) if (html.indexOf(w) >= 0) report.push(`${name}: must not contain ${JSON.stringify(w)}`);
++    // the 321 form pieces stay on every state
++    for (const w of ['data-version-form', 'name="min_version"', 'name="min_build"', 'data-version-remove', 'name="very_old"']) {
++      if (html.indexOf(w) < 0) report.push(`${name}: 321 form piece ${w} lost`);
++    }
++  }
++  if (report.length) {
++    console.log('SMOKE_FAIL\n' + report.join('\n'));
++    process.exit(1);
++  }
++  console.log('SMOKE_OK 322 appversion: ' + Object.keys(CASES).length + ' server states');
++})();
+diff --git a/internal/httpapi/version_rule.go b/internal/httpapi/version_rule.go
+index c7c3af9..2147849 100644
+--- a/internal/httpapi/version_rule.go
++++ b/internal/httpapi/version_rule.go
+@@ -286,7 +286,14 @@ func (a *API) AdminGetVersionRule(w http.ResponseWriter, r *http.Request) {
+ 			"by": rule.By, "signer": rule.Signer,
+ 		}
+ 	}
+-	writeJSON(w, http.StatusOK, map[string]any{"rule": ruleOut, "builds": builds})
++	var ruleBuild322 int64
++	if rule != nil && rule.MinBuild > 0 {
++		ruleBuild322 = rule.MinBuild
++	}
++	// Bundle 322 (V1): also the APKs on this server (+ `newest_upload`), so
++	// the page can fill the build from what is really here. Additive: an old
++	// web bundle ignores the new keys and behaves exactly as in 321.
++	a.versionRuleGet322(w, r, map[string]any{"rule": ruleOut, "builds": builds}, ruleBuild322)
+ }
+ 
+ // AdminSetVersionRule: owner only. A server-signed rule with seq = current + 1.
+@@ -306,11 +313,19 @@ func (a *API) AdminSetVersionRule(w http.ResponseWriter, r *http.Request) {
+ 		StopDays   int    `json:"stop_days"`
+ 		VeryOld    bool   `json:"very_old"`
+ 		Remove     bool   `json:"remove"`
++		// Bundle 322 (V5): the page opts in to "the build must be on this
++		// server". A caller that does not send it is accepted exactly as in
++		// 321, so scripts and old web bundles keep working.
++		RequireUpload bool `json:"require_upload322"`
+ 	}
+ 	if err := decodeJSON(r, &in, 8<<10); err != nil {
+ 		writeError(w, http.StatusBadRequest, "invalid request body")
+ 		return
+ 	}
++	if !in.Remove && in.RequireUpload && !a.buildOnServer322(in.MinBuild) {
++		writeError(w, http.StatusBadRequest, "that build is not on this server - upload it first")
++		return
++	}
+ 	now := time.Now().UTC()
+ 	rec := versionRuleBody{V: 1, Kind: "version_rule", ID: uuid.NewString(), Seq: 1,
+ 		At: now.Format(time.RFC3339Nano), By: admin.Username, Signer: "server", Mode: "warn"}
+diff --git a/internal/httpapi/version_rule_322.go b/internal/httpapi/version_rule_322.go
+new file mode 100644
+index 0000000..ba25643
+--- /dev/null
++++ b/internal/httpapi/version_rule_322.go
+@@ -0,0 +1,116 @@
++package httpapi
++
++// Bundle 322 (W4): the App version page picks the build from what is really
++// on this server. V1: GET /api/v1/admin/version-rule also returns `uploads`
++// (the APKs the owner put here). V5: a rule for a build that is not on the
++// server is refused, but only when the page asks for it (`require_upload322`),
++// so scripted / older callers keep working exactly as in 321.
++
++import (
++	"net/http"
++	"os"
++	"path/filepath"
++	"strings"
++	"time"
++)
++
++// versionUpload322 is one row of the pick list. Additive JSON: an old web
++// bundle ignores it.
++type versionUpload322 struct {
++	ID         int64  `json:"id"`
++	Version    string `json:"version"`
++	Build      int64  `json:"build"`
++	FileName   string `json:"file_name"`
++	Size       int64  `json:"size"`
++	SHA256     string `json:"sha256"`
++	AddedAt    string `json:"added_at"`
++	AddedBy    string `json:"added_by"`
++	Downloads  int64  `json:"downloads"`
++	Current    bool   `json:"current"`          // the download this server serves now
++	IsRule     bool   `json:"is_rule"`          // the saved rule points at this build
++	OnDisk     bool   `json:"on_disk"`          // the file is still there
++	PhonesHere int    `json:"phones_here"`      // 30 days, phones on exactly this build
++	Newest     bool   `json:"newest,omitempty"` // the newest upload (by build)
++}
++
++// versionUploads322 lists the APKs on this server, newest build first.
++func (a *API) versionUploads322(ruleBuild int64) []versionUpload322 {
++	out := []versionUpload322{}
++	rows, err := a.store.DB().Query(`SELECT ` + apkCols299 + ` FROM app_apk_299 ORDER BY build DESC, id DESC LIMIT 50`)
++	if err != nil {
++		return out
++	}
++	defer rows.Close()
++	for rows.Next() {
++		row, scanErr := scanAPK299(rows)
++		if scanErr != nil {
++			continue
++		}
++		out = append(out, versionUpload322{
++			ID: row.ID, Version: row.Version, Build: row.Build, FileName: row.FileName,
++			Size: row.Size, SHA256: row.SHA256, AddedAt: row.AddedAt, AddedBy: row.AddedBy,
++			Downloads: row.Downloads, Current: row.Current,
++			IsRule: ruleBuild > 0 && row.Build == ruleBuild,
++			OnDisk: a.apkOnDisk299(row.FileName),
++		})
++	}
++	if len(out) > 0 {
++		out[0].Newest = true
++	}
++	// How many phones are on exactly this build (30 days). One query.
++	since := time.Now().UTC().Add(-30 * 24 * time.Hour).Format(time.RFC3339Nano)
++	phones := map[int64]int{}
++	if pr, err := a.store.DB().Query(`SELECT build,COUNT(*) FROM device_builds WHERE seen_at>=? GROUP BY build`, since); err == nil {
++		for pr.Next() {
++			var b int64
++			var n int
++			if pr.Scan(&b, &n) == nil {
++				phones[b] = n
++			}
++		}
++		pr.Close()
++	}
++	for i := range out {
++		out[i].PhonesHere = phones[out[i].Build]
++	}
++	return out
++}
++
++// buildOnServer322: is this build one of the APKs this server has?
++func (a *API) buildOnServer322(build int64) bool {
++	if build < 1 {
++		return false
++	}
++	var n int
++	if err := a.store.DB().QueryRow(`SELECT COUNT(*) FROM app_apk_299 WHERE build=?`, build).Scan(&n); err != nil {
++		return false
++	}
++	return n > 0
++}
++
++// uploadPayload322: the small shape the page's pick list needs.
++func (a *API) uploadPayload322(ruleBuild int64) map[string]any {
++	uploads := a.versionUploads322(ruleBuild)
++	var newest any
++	if len(uploads) > 0 {
++		newest = uploads[0]
++	}
++	return map[string]any{"uploads": uploads, "newest_upload": newest}
++}
++
++// versionRuleGet322 wraps the 321 GET body with the new keys.
++func (a *API) versionRuleGet322(w http.ResponseWriter, r *http.Request, body map[string]any, ruleBuild int64) {
++	for k, v := range a.uploadPayload322(ruleBuild) {
++		body[k] = v
++	}
++	writeJSON(w, http.StatusOK, body)
++}
++
++// apkOnDisk299: is the file still in the APK folder? (nil-safe for tests)
++func (a *API) apkOnDisk299(name string) bool {
++	if strings.TrimSpace(name) == "" {
++		return false
++	}
++	_, err := os.Stat(filepath.Join(a.apkDir299(), name))
++	return err == nil
++}
+diff --git a/internal/httpapi/version_rule_322_test.go b/internal/httpapi/version_rule_322_test.go
+new file mode 100644
+index 0000000..df1485f
+--- /dev/null
++++ b/internal/httpapi/version_rule_322_test.go
+@@ -0,0 +1,122 @@
++package httpapi
++
++// Bundle 322 (W4 / V1 + V5 + V7): the App version page picks the build from
++// what is on the server. Old callers must see exactly the 321 behaviour.
++
++import (
++	"encoding/json"
++	"net/http"
++	"strconv"
++	"testing"
++)
++
++func jsonUnmarshal322(b []byte, v any) error { return json.Unmarshal(b, v) }
++
++// numOf322 reads a number out of a decoded JSON map (float64 or json.Number).
++func numOf322(v any) int64 {
++	switch n := v.(type) {
++	case float64:
++		return int64(n)
++	case int64:
++		return n
++	case json.Number:
++		i, _ := n.Int64()
++		return i
++	case string:
++		i, _ := strconv.ParseInt(n, 10, 64)
++		return i
++	}
++	return 0
++}
++
++// list322 calls the admin GET and returns the decoded body.
++func list322(t *testing.T, e apkEnv299) map[string]any {
++	t.Helper()
++	rec := e.get(t, e.api.AdminGetVersionRule, "/api/v1/admin/version-rule", "", map[string]string{
++		"Authorization": "Bearer " + e.token,
++	})
++	if rec.Code != http.StatusOK {
++		t.Fatalf("GET version-rule %d %s", rec.Code, rec.Body.String())
++	}
++	out := map[string]any{}
++	if err := jsonUnmarshal322(rec.Body.Bytes(), &out); err != nil {
++		t.Fatalf("body: %v", err)
++	}
++	return out
++}
++
++func TestVersionRule322ReturnsUploads(t *testing.T) {
++	e := newAPKEnv299(t)
++	key := cert299(t, "sajjad")
++	if code, out := e.upload(t, apk299Bytes(t, "com.sajjad.linkup", 183, "3.0.112", key)); code != http.StatusOK {
++		t.Fatalf("upload 183: %d %v", code, out)
++	}
++	if code, out := e.upload(t, apk299Bytes(t, "com.sajjad.linkup", 184, "3.0.113", key)); code != http.StatusOK {
++		t.Fatalf("upload 184: %d %v", code, out)
++	}
++	// The rule is behind the newest upload - the case the page must show.
++	setRule213(t, e.api, e.token, map[string]any{"min_build": 183, "min_version": "3.0.112", "mode": "warn"})
++
++	body := list322(t, e)
++	// 321 keys are untouched.
++	if body["rule"] == nil || body["builds"] == nil {
++		t.Fatalf("321 keys missing: %v", body)
++	}
++	uploads, ok := body["uploads"].([]any)
++	if !ok || len(uploads) != 2 {
++		t.Fatalf("uploads: %T %v", body["uploads"], body["uploads"])
++	}
++	newest := uploads[0].(map[string]any)
++	if numOf322(newest["build"]) != 184 || newest["newest"] != true {
++		t.Fatalf("newest must be build 184: %v", newest)
++	}
++	if newest["is_rule"] != false {
++		t.Fatalf("184 is not the rule: %v", newest)
++	}
++	if newest["on_disk"] != true {
++		t.Fatalf("the file is on the server: %v", newest)
++	}
++	old := uploads[1].(map[string]any)
++	if numOf322(old["build"]) != 183 || old["is_rule"] != true {
++		t.Fatalf("183 is the rule: %v", old)
++	}
++	if top, ok := body["newest_upload"].(map[string]any); !ok || numOf322(top["build"]) != 184 {
++		t.Fatalf("newest_upload: %v", body["newest_upload"])
++	}
++}
++
++func TestVersionRule322NoUploadsKeepsTheOldShape(t *testing.T) {
++	e := newAPKEnv299(t)
++	body := list322(t, e)
++	uploads, ok := body["uploads"].([]any)
++	if !ok || len(uploads) != 0 {
++		t.Fatalf("no uploads expected: %v", body["uploads"])
++	}
++	if body["newest_upload"] != nil {
++		t.Fatalf("newest_upload must be nil: %v", body["newest_upload"])
++	}
++	// A rule can still be saved with no APK at all (typed by hand).
++	setRule213(t, e.api, e.token, map[string]any{"min_build": 150, "min_version": "3.0.90", "mode": "warn"})
++	if body := list322(t, e); body["rule"] == nil {
++		t.Fatalf("the rule was not saved: %v", body)
++	}
++}
++
++func TestVersionRule322RefusesABuildThatIsNotOnTheServer(t *testing.T) {
++	e := newAPKEnv299(t)
++	key := cert299(t, "sajjad")
++	if code, out := e.upload(t, apk299Bytes(t, "com.sajjad.linkup", 184, "3.0.113", key)); code != http.StatusOK {
++		t.Fatalf("upload: %d %v", code, out)
++	}
++	// The page asks for the guard: a build nobody can download is refused.
++	res := doJSON(t, e.api.AdminSetVersionRule, http.MethodPost, "/api/v1/admin/version-rule",
++		map[string]any{"min_build": 999, "min_version": "9.9.9", "mode": "warn", "require_upload322": true},
++		map[string]string{"Authorization": "Bearer " + e.token})
++	if res.Code != http.StatusBadRequest {
++		t.Fatalf("expected 400 for a build not on the server, got %d %s", res.Code, res.Body.String())
++	}
++	// A build that IS on the server is accepted.
++	setRule213(t, e.api, e.token, map[string]any{"min_build": 184, "min_version": "3.0.113", "mode": "warn", "require_upload322": true})
++	// And a caller that does not send the flag keeps the 321 behaviour.
++	setRule213(t, e.api, e.token, map[string]any{"min_build": 999, "min_version": "9.9.9", "mode": "warn"})
++}

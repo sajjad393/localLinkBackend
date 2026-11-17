@@ -286,7 +286,14 @@ func (a *API) AdminGetVersionRule(w http.ResponseWriter, r *http.Request) {
 			"by": rule.By, "signer": rule.Signer,
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"rule": ruleOut, "builds": builds})
+	var ruleBuild322 int64
+	if rule != nil && rule.MinBuild > 0 {
+		ruleBuild322 = rule.MinBuild
+	}
+	// Bundle 322 (V1): also the APKs on this server (+ `newest_upload`), so
+	// the page can fill the build from what is really here. Additive: an old
+	// web bundle ignores the new keys and behaves exactly as in 321.
+	a.versionRuleGet322(w, r, map[string]any{"rule": ruleOut, "builds": builds}, ruleBuild322)
 }
 
 // AdminSetVersionRule: owner only. A server-signed rule with seq = current + 1.
@@ -306,9 +313,17 @@ func (a *API) AdminSetVersionRule(w http.ResponseWriter, r *http.Request) {
 		StopDays   int    `json:"stop_days"`
 		VeryOld    bool   `json:"very_old"`
 		Remove     bool   `json:"remove"`
+		// Bundle 322 (V5): the page opts in to "the build must be on this
+		// server". A caller that does not send it is accepted exactly as in
+		// 321, so scripts and old web bundles keep working.
+		RequireUpload bool `json:"require_upload322"`
 	}
 	if err := decodeJSON(r, &in, 8<<10); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !in.Remove && in.RequireUpload && !a.buildOnServer322(in.MinBuild) {
+		writeError(w, http.StatusBadRequest, "that build is not on this server - upload it first")
 		return
 	}
 	now := time.Now().UTC()

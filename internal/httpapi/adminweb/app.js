@@ -1227,13 +1227,18 @@
     if (!form) return;
     event.preventDefault();
     const when = (form.querySelector('[name="when"]:checked') || {}).value || 'warn';
-    saveVersionRule({
+    const body = {
       min_version: form.querySelector('[name="min_version"]').value.trim(),
       min_build: Number(form.querySelector('[name="min_build"]').value),
       mode: when === 'warn' ? 'warn' : 'stop',
       stop_days: when === 'days' ? Number(form.querySelector('[name="stop_days"]').value) : 0,
       very_old: form.querySelector('[name="very_old"]').checked,
-    }, form.querySelector('[data-version-note]'));
+    };
+    // Bundle 322 (V5): this page filled the build from a real upload, so the
+    // server must have that build (no rule for a build nobody can get).
+    // Typed by hand (no APK on the server) is accepted exactly as in 321.
+    if (form.getAttribute('data-readonly') === '1') body.require_upload322 = true;
+    saveVersionRule(body, form.querySelector('[data-version-note]'));
   });
   document.addEventListener('click', (event) => {
     const btn = event.target.closest('[data-version-remove]');

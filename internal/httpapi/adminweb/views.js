@@ -3921,6 +3921,10 @@ LL.views = {};
 
   // -------------------------------------------------------------- app version
   // Bundle 213: minimum app version (warn / stop old builds).
+  // Bundle 322 (W4 / V2-V4, V6): the build is picked from what is really on
+  // this server. The approved shape is mocks/n322/admin_web_appversion_322.html
+  // (PASS 84/84 with tools/ui_overlap_test_web.py). Only classes that already
+  // exist in styles.css are used.
   const appversion = {
     id: 'appversion',
     title: 'App version',
@@ -3935,40 +3939,184 @@ LL.views = {};
       const data = result.data || {};
       const rule = data.rule;
       const builds = Array.isArray(data.builds) ? data.builds : [];
-      const ruleText = rule
-        ? `Below build ${ui.esc(rule.min_build)} (${ui.esc(rule.min_version)}): ${rule.mode === 'warn' ? 'warn only' : 'stop from ' + ui.esc(rule.stop_at)}${rule.very_old ? ' · very old apps stopped' : ''} · by ${ui.esc(rule.by)}`
-        : 'None set';
-      // Bundle 217: ui.table so a phone shows each build as a card.
-      const rows = builds.map((b) => [ui.esc(b.build), ui.esc(b.devices), ui.esc(b.last_seen)]);
+      // Bundle 322: newest first (the server already sorts by build DESC).
+      const uploads = Array.isArray(data.uploads) ? data.uploads : [];
+      const newest = uploads.length ? uploads[0] : null;
+      const ruleBuild = rule && rule.min_build ? num(rule.min_build) : 0;
+      // V2: the saved rule is preferred; with no rule the newest upload
+      // fills the two boxes. No upload at all -> the boxes stay editable
+      // exactly as in 321 (never a dead end).
+      const start = rule && rule.min_build ? rule : (newest || null);
+      const startName = start ? String(start.min_version || start.version || '') : '';
+      const startBuild = start ? num(start.min_build || start.build) : '';
+      const readOnly = !!newest;
+      // V6: the state line - green / amber / grey.
+      let stateTone = 'neutral';
+      let stateText = 'No APK on this server yet - type the version by hand or upload one in App download.';
+      if (newest && ruleBuild) {
+        if (ruleBuild === num(newest.build)) {
+          stateTone = 'success';
+          stateText = `The rule is the newest upload (${ui.esc(newest.version)} · build ${ui.esc(newest.build)}).`;
+        } else if (num(newest.build) > ruleBuild) {
+          stateTone = 'warning';
+          const behind = num(newest.phones_here) || 0;
+          stateText = `A newer upload is here (${ui.esc(newest.version)} · build ${ui.esc(newest.build)}), the rule is still build ${ruleBuild}.`
+            + (behind ? ` ${behind} phones are on the newest build already.` : '');
+        } else {
+          stateTone = 'neutral';
+          stateText = `The rule (build ${ruleBuild}) is newer than the newest upload here (build ${ui.esc(newest.build)}).`;
+        }
+      } else if (newest) {
+        stateTone = 'neutral';
+        stateText = `No rule yet. The newest upload is ${ui.esc(newest.version)} · build ${ui.esc(newest.build)} - tap "Use this build".`;
+      }
+      const ruleStats = rule
+        ? ui.statRow([
+            { label: 'Minimum build', value: String(rule.min_build) },
+            { label: 'Minimum version', value: String(rule.min_version) },
+            { label: 'What happens', value: rule.mode === 'warn' ? 'Warn only' : `Stop from ${rule.stop_at}` },
+            { label: 'Set by', value: String(rule.by || '') },
+          ])
+        : `<p data-version-current>No minimum version is set - every build may use the app.</p>`;
+
+      const newestCard = newest
+        ? `<div class="apk299-up" data-version-newest>
+            <div class="grow" style="min-width:0">
+              <div class="row gap-sm" style="flex-wrap:wrap">
+                <b>${ui.esc(newest.file_name || 'APK')}</b>
+                ${ui.badge(`build ${newest.build}`, 'primary', { dot: true })}
+                ${num(newest.build) === ruleBuild ? ui.badge('this is the rule', 'success') : ui.badge('not the rule yet', 'neutral')}
+              </div>
+              <div class="type-caption" style="margin-top:4px">${ui.esc(newest.version)} · ${mb299(newest.size)} · uploaded ${ui.esc(when299(newest.added_at))} by ${ui.esc(newest.added_by || 'owner')}</div>
+              <div class="apk299-stats">
+                ${ui.badge(newest.on_disk ? 'file on the server' : 'file missing', newest.on_disk ? 'success' : 'danger')}
+                ${ui.badge(`${num(newest.phones_here) || 0} phones on this build`, 'neutral')}
+                ${ui.badge(`${num(newest.downloads) || 0} downloads`, 'neutral')}
+              </div>
+            </div>
+          </div>`
+        : `<div class="apk299-none"><p class="type-caption">Nothing uploaded yet. The fields below stay editable so a rule can still be set by hand.</p></div>`;
+
+      const pickRow = uploads.length
+        ? `<div class="row gap-sm" style="margin-top:10px;flex-wrap:wrap">
+             <button class="btn btn-sm btn-primary" type="button" data-version-use-newest>Use this build</button>
+             ${uploads.length > 1 ? `<button class="btn btn-sm" type="button" data-version-pick>Pick another upload… (${uploads.length - 1} older)</button>` : ''}
+             <button class="btn btn-sm" type="button" data-nav="apkdownload">Upload a new APK</button>
+           </div>`
+        : `<div class="row gap-sm" style="margin-top:10px;flex-wrap:wrap">
+             <button class="btn btn-sm" type="button" data-nav="apkdownload">Upload a new APK</button>
+           </div>`;
+
+      // V2/V3: read-only boxes filled from the picked build; "Use this build"
+      // fills them from the newest upload. Save stays a tap.
+      const nameAttrs = readOnly ? 'readonly' : '';
+      const buildAttrs = readOnly ? 'readonly' : 'type="number" min="1"';
+      const tableRows = builds.map((b) => {
+        const n = num(b.build);
+        const pills = [
+          n === ruleBuild ? ui.badge('rule', 'primary') : '',
+          newest && n === num(newest.build) ? ui.badge('newest upload', 'info') : '',
+        ].filter(Boolean).join(' ');
+        return [ui.esc(b.build), ui.esc(b.devices), ui.esc(b.last_seen), pills];
+      });
+      const pickList = uploads.map((u, i) => `
+        <button class="auth-note" type="button" data-version-use="${ui.esc(u.build)}" style="display:flex;gap:10px;align-items:center;width:100%;text-align:left;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-muted);margin-bottom:8px;min-width:0">
+          <span class="grow" style="min-width:0">
+            <b style="display:block">${ui.esc(u.version)} · build ${ui.esc(u.build)}</b>
+            <span class="type-caption">${ui.esc(when299(u.added_at))} · ${mb299(u.size)}${i === 0 ? ' · newest' : ''}${num(u.build) === ruleBuild ? ' · this is the rule' : ''}</span>
+          </span>
+          ${ui.badge(u.on_disk ? 'on server' : 'file missing', u.on_disk ? 'success' : 'danger')}
+        </button>`).join('');
+
       el.innerHTML = `
         <div class="section">
           ${ui.sectionHead({ title: 'App version', subtitle: 'Old phones get a warning, then can only read chats until they update', icon: 'i-devices' })}
-          ${ui.panel({ title: 'Current rule', subtitle: 'Signed by the server; phones pass it on with no internet', body: `<p data-version-current>${ruleText}</p>` })}
+          ${ui.panel({ title: 'Current rule', subtitle: 'Signed by the server; phones pass it on with no internet', body: ruleStats })}
           ${ui.panel({
             title: 'Minimum version', subtitle: 'Phones below it are warned or stopped',
-            body: `<form class="stack gap-lg" data-version-form style="max-width:520px">
-              <div class="field"><label for="ver-name">Version name (e.g. 3.0.54)</label>
-                <input class="input" id="ver-name" name="min_version" value="${ui.esc(rule ? rule.min_version : '')}"></div>
-              <div class="field"><label for="ver-build">Build number (e.g. 125)</label>
-                <input class="input" id="ver-build" name="min_build" type="number" min="1" value="${ui.esc(rule ? rule.min_build : '')}"></div>
-              <div class="field"><label>What happens</label>
-                <label><input type="radio" name="when" value="warn"> Warn only</label>
-                <label><input type="radio" name="when" value="now"> Stop now</label>
-                <label><input type="radio" name="when" value="days" checked> Stop after
-                  <input class="input" name="stop_days" type="number" min="1" max="30" value="3" style="width:80px;display:inline-block"> days</label></div>
-              <label><input type="checkbox" name="very_old"> Also stop very old apps (before 3.0.54)</label>
-              <div class="row gap-md">
+            body: `<form class="stack gap-lg" data-version-form data-readonly="${readOnly ? '1' : '0'}" novalidate>
+              <div class="field">
+                <label>Newest upload on this server</label>
+                ${newestCard}
+                ${pickRow}
+                <div class="row gap-sm" style="margin-top:10px;align-items:flex-start;min-width:0">
+                  <span class="dot" style="margin-top:6px;flex:none;width:8px;height:8px;border-radius:50%;background:var(--${stateTone === 'success' ? 'success' : stateTone === 'warning' ? 'warning' : 'text-tertiary'})"></span>
+                  <span class="type-caption" style="min-width:0;overflow-wrap:break-word" data-version-state>${stateText}</span>
+                </div>
+              </div>
+              <div class="grid grid-2">
+                <div class="field">
+                  <label for="ver-name">Version name</label>
+                  <input class="input" id="ver-name" name="min_version" value="${ui.esc(startName)}" ${nameAttrs}>
+                  <div class="type-caption" style="margin-top:4px">${readOnly ? 'Read from the APK at upload - not typed any more.' : 'Type it by hand (no APK on this server yet).'}</div>
+                </div>
+                <div class="field">
+                  <label for="ver-build">Build number</label>
+                  <input class="input" id="ver-build" name="min_build" value="${ui.esc(startBuild)}" ${buildAttrs}>
+                  <div class="type-caption" style="margin-top:4px">${readOnly ? 'versionCode from the APK on this server.' : 'The build you want to warn or stop below.'}</div>
+                </div>
+              </div>
+              <div class="field">
+                <label>What happens</label>
+                <label><input type="radio" name="when" value="warn" ${rule && rule.mode === 'warn' ? 'checked' : ''}> Warn only</label>
+                <label><input type="radio" name="when" value="now" ${rule && rule.mode !== 'warn' && !start ? 'checked' : ''}> Stop now</label>
+                <label><input type="radio" name="when" value="days" ${!rule ? 'checked' : rule.mode !== 'warn' ? 'checked' : ''}> Stop after
+                  <input class="input" name="stop_days" type="number" min="0" max="30" value="3" style="width:80px;display:inline-block"> days</label>
+              </div>
+              <label><input type="checkbox" name="very_old" ${rule && rule.very_old ? 'checked' : ''}> Also stop very old apps (before 3.0.54)</label>
+              <div class="row gap-md" style="flex-wrap:wrap">
                 <button class="btn btn-primary" type="submit">Save rule</button>
                 <button class="btn" type="button" data-version-remove>Remove rule</button>
                 <span class="type-caption" data-version-note></span>
               </div>
+              <div class="type-caption">Saving a rule can stop phones - it always takes this tap.</div>
             </form>`,
           })}
-          ${ui.panel({ title: 'Phones by build', subtitle: 'Last 30 days', body: ui.table({ columns: [{ label: 'Build' }, { label: 'Phones' }, { label: 'Last seen' }], rows, emptyTitle: 'No builds yet', emptyMessage: 'No phone has sent its build yet (apps from 3.0.54 do).' }) })}
+          ${ui.panel({ title: 'Phones by build', subtitle: 'Last 30 days', body: ui.table({ columns: [{ label: 'Build' }, { label: 'Phones' }, { label: 'Last seen' }, { label: '' }], rows: tableRows, emptyTitle: 'No builds yet', emptyMessage: 'No phone has sent its build yet (apps from 3.0.54 do).' }) })}
         </div>`;
+
+      // V3: "Use this build" (the newest upload) fills both boxes.
+      const useNewest = el.querySelector('[data-version-use-newest]');
+      if (useNewest && newest) {
+        useNewest.addEventListener('click', () => {
+          el.querySelector('[name="min_version"]').value = String(newest.version || '');
+          el.querySelector('[name="min_build"]').value = String(newest.build || '');
+        });
+      }
+      // V4: the pick sheet - newest first, keyboard (Esc) closes it.
+      const pickBtn = el.querySelector('[data-version-pick]');
+      if (pickBtn) {
+        pickBtn.addEventListener('click', () => {
+          const host = document.getElementById('modal-host');
+          host.innerHTML = `<div class="modal-scrim" role="dialog" aria-modal="true" aria-label="Pick another upload">
+            <div class="modal" style="width:min(560px,100%)">
+              <div class="pop-head">
+                <div class="grow"><h2>Pick another upload</h2><span class="type-caption">The APKs on this server, newest first</span></div>
+                <button class="btn btn-icon" data-modal="close" aria-label="Close">${ui.icon('i-close')}</button>
+              </div>
+              <div>${pickList}</div>
+            </div>
+          </div>`;
+          const close = () => { host.innerHTML = ''; document.removeEventListener('keydown', onKey); };
+          const onKey = (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); close(); } };
+          document.addEventListener('keydown', onKey);
+          host.querySelector('[data-modal="close"]').addEventListener('click', close);
+          host.querySelector('.modal-scrim').addEventListener('click', (ev) => { if (ev.target.classList.contains('modal-scrim')) close(); });
+          host.querySelectorAll('[data-version-use]').forEach((b) => b.addEventListener('click', () => {
+            const u = uploads.find((x) => String(x.build) === b.getAttribute('data-version-use'));
+            if (!u) return;
+            const nameEl = el.querySelector('[name="min_version"]');
+            const buildEl = el.querySelector('[name="min_build"]');
+            if (nameEl) nameEl.value = String(u.version || '');
+            if (buildEl) buildEl.value = String(u.build || '');
+            const note = el.querySelector('[data-version-note]');
+            if (note) note.textContent = `Picked ${u.version} · build ${u.build}. Tap "Save rule" to apply it.`;
+            close();
+          }));
+        });
+      }
     },
   };
-
 
   // ------------------------------------------------------------ app download
   // Bundle 299 (A): the owner puts the LinkUp APK on the server. Everyone on

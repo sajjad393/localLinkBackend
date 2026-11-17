@@ -260,7 +260,7 @@ a:hover { text-decoration: underline; }
   background: linear-gradient(140deg, var(--primary), var(--info));
   display: grid; place-items: center; color: #fff;
 }
-.field { display: grid; gap: var(--space-xs); }
+.field { display: grid; gap: var(--space-xs); grid-template-columns: minmax(0, 1fr); } /* 322 W5: a wide child (upload card, table) must not widen the form */
 .field > label { font-weight: 600; font-size: 12.5px; color: var(--text-secondary); }
 .input {
   height: 40px;
@@ -476,6 +476,12 @@ select.input { height: 34px; }
 
 .content { padding: var(--space-page); flex: 1; min-width: 0; }
 .content-inner { max-width: var(--content-max); margin: 0 auto; display: grid; gap: var(--space-xxl); }
+/* Bundle 322 (W5/L2): a phone-width page must never scroll sideways.
+   .content-inner is a grid, so its implicit column is max-content: ONE wide
+   child (the Phones-by-build table) pushed the whole page to 792 px at a
+   390 px window. minmax(0,1fr) lets the column shrink; the table then
+   scrolls inside its own .table-wrap (overflow-x:auto), as the mock does. */
+.content-inner { grid-template-columns: minmax(0, 1fr); }
 .drawer-scrim { position: fixed; inset: 0; background: rgba(8, 12, 20, 0.45); z-index: 25; }
 
 /* --------------------------------------------------------------------------
@@ -501,7 +507,7 @@ select.input { height: 34px; }
 .panel-head .sub { font-size: 12px; color: var(--text-secondary); }
 .panel-actions { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
 
-.section { display: grid; gap: var(--space-lg); }
+.section { display: grid; gap: var(--space-lg); grid-template-columns: minmax(0, 1fr); } /* 322 W5: same max-content trap one level down */
 .section-head { display: flex; align-items: flex-start; gap: var(--space-md); }
 .section-head .grow { display: grid; gap: 2px; }
 .section-head h2 { font-size: 16px; }
